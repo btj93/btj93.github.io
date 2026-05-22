@@ -71,7 +71,7 @@ It's not as elegant as a CRDT, but in practice the user opens both instances, se
 
 ## Suggestion blocks: render as a diff, apply in place
 
-GitHub-style suggestion blocks look like this in a comment body:
+[GitHub-style suggestion blocks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/incorporating-feedback-in-your-pull-request) look like this in a comment body:
 
 ````
 The variable name should be more descriptive:
@@ -133,7 +133,7 @@ The trick: when you check out a PR via pr.nvim's picker, the plugin remembers th
 
 ## Review submission: batched, not per-comment
 
-GitHub (and friends) have two modes for posting review comments:
+GitHub (and friends) have two modes for [posting review comments](https://docs.github.com/en/rest/pulls/reviews):
 
 - **Single comment** — fires off immediately, no review context.
 - **Pending comment inside a review** — staged, attached to a review, posted as a group when you "submit" the review with `Approve` / `Request changes` / `Comment`.
@@ -179,7 +179,7 @@ This pattern — fire a `User` event, let consumers re-render — keeps the winb
 
 Last month's post described publishing threads as diagnostics in a custom namespace. That was the right call but the integration was incomplete: `:PRQuickfix` was a custom command that mimicked the quickfix list, and severity tuning was a hardcoded mapping.
 
-The October pass aligned things properly:
+The October pass aligned things properly with [`vim.diagnostic`](https://neovim.io/doc/user/diagnostic.html):
 
 ```lua
 opts = {
@@ -214,3 +214,12 @@ If there's a part 3, that's probably what it covers. For now the goal of "don't 
 Closer to the goal every month.
 
 Happy reviewing!
+
+## References
+
+- [Part 1: Why I built pr.nvim](/why-i-built-pr-nvim)
+- [`vim.diagnostic`](https://neovim.io/doc/user/diagnostic.html) — including `setqflist` and severity levels
+- [Neovim user-events / autocmds](https://neovim.io/doc/user/autocmd.html#User)
+- [GitHub: incorporating feedback / suggestion blocks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/incorporating-feedback-in-your-pull-request)
+- [GitHub REST API — pull request reviews](https://docs.github.com/en/rest/pulls/reviews)
+- [nui.nvim](https://github.com/MunifTanjim/nui.nvim) — popup layouts

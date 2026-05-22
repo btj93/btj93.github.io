@@ -14,13 +14,13 @@ This post is the "what is it, why does it exist, and what does it actually do" i
 
 ## The pitch
 
-Every tiling window manager I've used on macOS divides the screen into rectangles and stuffs windows into them. Yabai, Amethyst, Aerospace — all flavors of "split the available pixels".
+Every tiling window manager I've used on macOS divides the screen into rectangles and stuffs windows into them. [yabai](https://github.com/koekeishiya/yabai), [Amethyst](https://github.com/ianyh/Amethyst), [AeroSpace](https://github.com/nikitabobko/AeroSpace) — all flavors of "split the available pixels".
 
 This is a perfectly reasonable thing to do, and it's wrong for me.
 
 What I want is closer to how I work on paper. I have one window I'm focused on, a couple I might glance at, and a stack of "I'll get back to these" that don't need to be visible right now. I don't want them tiled into smaller and smaller boxes; I want them off-screen, waiting, available with one keystroke.
 
-Inspired by [niri](https://github.com/YaLTeR/niri) on Linux, Reel arranges windows on an infinite horizontal strip — one column per window — and the screen is a *viewport* onto that strip. You scroll the strip left or right to navigate. The focused window stays prominent. Its neighbors are visible at the edges of the screen. Everything else is parked off-screen at a position you can return to instantly.
+Inspired by [niri](https://github.com/YaLTeR/niri) (a scrollable-tiling Wayland compositor on Linux), Reel arranges windows on an infinite horizontal strip — one column per window — and the screen is a *viewport* onto that strip. You scroll the strip left or right to navigate. The focused window stays prominent. Its neighbors are visible at the edges of the screen. Everything else is parked off-screen at a position you can return to instantly.
 
 The result feels a lot more like flipping through a film reel than tiling a grid. Hence the name.
 
@@ -44,7 +44,7 @@ The result feels a lot more like flipping through a film reel than tiling a grid
 
 **IPC.** A `reel-msg` CLI sends commands over a Unix socket. Hook it up to whatever scripting layer you like.
 
-No SIP disable. Pure Swift + the macOS Accessibility API.
+No [SIP](https://support.apple.com/en-us/102149) disable. Pure Swift + the macOS [Accessibility API](https://developer.apple.com/documentation/applicationservices/axuielement).
 
 ## Why Swift, and why no SIP
 
@@ -55,7 +55,7 @@ A non-trivial chunk of macOS window-manager prior art relies on disabling System
 
 That leaves the documented Accessibility API as the way windows get moved and resized, and a single (one!) carefully-chosen private symbol — `_AXUIElementGetWindow`, which maps `AXUIElement` → `CGWindowID` — that's been stable for a decade and is used by every other AX-based WM in the ecosystem.
 
-Swift is the natural language. Foundation gives you the data types, AppKit gives you windows and screens, `CGEventTap` gives you global hotkeys and gestures, `CADisplayLink` gives you a frame loop. No bridging headers, no Objective-C++, no Electron.
+Swift is the natural language. Foundation gives you the data types, AppKit gives you windows and screens, [`CGEventTap`](https://developer.apple.com/documentation/coregraphics/quartz_event_services) gives you global hotkeys and gestures, [`CADisplayLink`](https://developer.apple.com/documentation/quartzcore/cadisplaylink) gives you a frame loop. No bridging headers, no Objective-C++, no Electron.
 
 ## The layering
 
@@ -146,3 +146,18 @@ The current state: Reel is in active daily use on my laptop. Most of the obvious
 Next month I want to write specifically about coordinate systems and the kinds of bugs you only find when you have three of them in the same source file. Until then — if you're a Mac user who's been looking for a Linux-style scrollable WM, the binary is up and the source is open.
 
 Happy scrolling.
+
+## References
+
+**Prior art**
+
+- [niri](https://github.com/YaLTeR/niri) — scrollable-tiling Wayland compositor (the direct inspiration)
+- [yabai](https://github.com/koekeishiya/yabai), [Amethyst](https://github.com/ianyh/Amethyst), [AeroSpace](https://github.com/nikitabobko/AeroSpace) — other macOS tiling WMs
+
+**Apple APIs**
+
+- [Accessibility (`AXUIElement`)](https://developer.apple.com/documentation/applicationservices/axuielement)
+- [`NSView`](https://developer.apple.com/documentation/appkit/nsview), [`NSWindow`](https://developer.apple.com/documentation/appkit/nswindow), [`NSScreen`](https://developer.apple.com/documentation/appkit/nsscreen)
+- [Quartz Event Services (`CGEventTap`)](https://developer.apple.com/documentation/coregraphics/quartz_event_services)
+- [`CADisplayLink`](https://developer.apple.com/documentation/quartzcore/cadisplaylink)
+- [About System Integrity Protection](https://support.apple.com/en-us/102149)

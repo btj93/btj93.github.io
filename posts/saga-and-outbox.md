@@ -33,7 +33,7 @@ Each of these is a real outage waiting to happen, and the moment your business h
 
 ## Why people say "just use 2PC" and why I disagree
 
-The classical computer-science answer is two-phase commit: have a transaction coordinator prepare all the resource managers, then either commit them all or roll them all back.
+The classical computer-science answer is [two-phase commit](https://en.wikipedia.org/wiki/Two-phase_commit_protocol): have a transaction coordinator prepare all the resource managers, then either commit them all or roll them all back.
 
 Why it's a tempting answer:
 
@@ -50,7 +50,7 @@ So 2PC moves to the bottom of the toolbox. What's at the top?
 
 ## The Outbox pattern: solve the database/queue boundary
 
-The Outbox pattern fixes one specific subset of the problem: **"I need to write to my database AND publish a message, atomically."**
+The [Outbox pattern](https://microservices.io/patterns/data/transactional-outbox.html) fixes one specific subset of the problem: **"I need to write to my database AND publish a message, atomically."**
 
 The trick is brutally simple. Instead of writing to the database *and* publishing, you write *both into the database*:
 
@@ -76,15 +76,15 @@ A few things this pattern needs to get right:
 3. **Backpressure.** A burst of orders writes a burst of outbox rows. The relay needs to keep up; if it falls behind, lag grows. Monitor outbox table size.
 4. **Garbage collection.** Don't grow the outbox table forever. Either delete sent rows or move them to a cold archive.
 
-The implementation can be remarkably simple — the first one I wrote in production was a goroutine that did `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 100 WHERE sent_at IS NULL`, published each row, then `UPDATE ... SET sent_at = now()`. With a single instance running you get a stream of events with the same atomicity as the database itself.
+The implementation can be remarkably simple — the first one I wrote in production was a goroutine that did [`SELECT ... FOR UPDATE SKIP LOCKED`](https://www.postgresql.org/docs/current/sql-select.html) `LIMIT 100 WHERE sent_at IS NULL`, published each row, then `UPDATE ... SET sent_at = now()`. With a single instance running you get a stream of events with the same atomicity as the database itself.
 
-For higher throughput you can move to log-based delivery — let a CDC tool (Debezium, etc.) read the database WAL and publish for you. Same idea, more plumbing.
+For higher throughput you can move to log-based delivery — let a CDC tool ([Debezium](https://github.com/debezium/debezium), etc.) read the database WAL and publish for you. Same idea, more plumbing.
 
 ## The Saga pattern: solve the cross-service boundary
 
 The Outbox is great when the second step is "publish a message". It's silent on the harder case: **"I need to do two business operations across two services, and if the second one fails I need to undo the first."**
 
-For that, you reach for sagas.
+For that, you reach for [sagas](https://microservices.io/patterns/data/saga.html).
 
 A saga is a sequence of *local* transactions, each in its own service or database, with a *compensating action* defined for each step. If step N fails, you run the compensations for N-1, N-2, ... back to 1. There's no global transaction; instead there's a defined recovery procedure.
 
@@ -182,3 +182,12 @@ Get those right and most of the multi-system writes you ever do are tractable.
 The next time I hit "I need to update my DB and call an external API atomically" I will *not* be looking for an XA driver. I'll be writing an outbox table.
 
 Happy committing.
+
+## References
+
+- [Saga pattern (microservices.io)](https://microservices.io/patterns/data/saga.html)
+- [Transactional outbox pattern (microservices.io)](https://microservices.io/patterns/data/transactional-outbox.html)
+- [Two-phase commit protocol — Wikipedia](https://en.wikipedia.org/wiki/Two-phase_commit_protocol)
+- [Debezium](https://github.com/debezium/debezium) — change-data-capture for relational databases
+- [PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`](https://www.postgresql.org/docs/current/sql-select.html) — the locking clause
+- Related — [Idempotency keys](/idempotency-keys-deduped-writes)

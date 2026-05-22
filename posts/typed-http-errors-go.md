@@ -117,7 +117,7 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 }
 ```
 
-The `Detail` field deliberately uses `e.Err.Error()` and not the *full* chain via `%+v`. Wrapped causes stay reachable on the server side via `errors.Unwrap`, but they don't leak to the client.
+The `Detail` field deliberately uses `e.Err.Error()` and not the *full* chain via `%+v`. Wrapped causes stay reachable on the server side via [`errors.Unwrap`](https://pkg.go.dev/errors#Unwrap), but they don't leak to the client.
 
 ## The chainable constructors
 
@@ -170,7 +170,7 @@ I've shipped that bug. Once was enough.
 
 ## Wiring it into Echo (or any framework)
 
-The framework-specific bit is dead simple. For Echo, a single middleware that knows about your error type:
+The framework-specific bit is dead simple. For [Echo](https://echo.labstack.com/), a single middleware that knows about your error type:
 
 ```go
 func ErrorHandler(err error, c echo.Context) {
@@ -221,3 +221,11 @@ A few things I keep coming back to:
 The whole thing is maybe 200 lines of Go, but it's 200 lines I end up writing on every greenfield service. Better to write them once, on purpose, than to grow them by accretion.
 
 Happy erroring!
+
+## References
+
+- Go `errors` package — [`pkg.go.dev/errors`](https://pkg.go.dev/errors) (covers `Is`, `As`, `Unwrap`, `Join`)
+- `fmt.Errorf` and the `%w` verb — [`pkg.go.dev/fmt#Errorf`](https://pkg.go.dev/fmt#Errorf)
+- Go `encoding/json` package — [`pkg.go.dev/encoding/json`](https://pkg.go.dev/encoding/json) (custom `MarshalJSON`)
+- Go `net/http` status code constants — [`pkg.go.dev/net/http`](https://pkg.go.dev/net/http)
+- Echo web framework — [`echo.labstack.com`](https://echo.labstack.com/)

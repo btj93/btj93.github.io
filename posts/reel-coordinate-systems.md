@@ -44,7 +44,7 @@ Here are the three. They are all valid, all in use somewhere in the macOS toolch
 
 **Origin: top-left of the primary display. Y grows downward.**
 
-This is the world `CGEvent.location` lives in. It's what AX returns for a window's `position` attribute. It's what `CGRect` measurements in `CoreGraphics` use.
+This is the world [`CGEvent.location`](https://developer.apple.com/documentation/coregraphics/cgevent) lives in. It's what AX returns for a window's `position` attribute. It's what `CGRect` measurements in CoreGraphics use.
 
 ```
 (0, 0) ────────► +X
@@ -59,7 +59,7 @@ If you're reading the mouse position, you're in CG.
 
 **Origin: bottom-left of the primary display. Y grows upward. Spans all displays.**
 
-This is the world `NSScreen.frame` lives in. It's the coord space `NSWindow.frame` is *expressed in*. It's what `NSEvent.locationInWindow` ultimately gets converted from.
+This is the world [`NSScreen.frame`](https://developer.apple.com/documentation/appkit/nsscreen) lives in. It's the coord space [`NSWindow.frame`](https://developer.apple.com/documentation/appkit/nswindow) is *expressed in*. It's what `NSEvent.locationInWindow` ultimately gets converted from.
 
 ```
    ▲ +Y
@@ -74,7 +74,7 @@ On a single-monitor setup, the AppKit global y-coord is just `screenHeight - cgY
 
 **Origin: bottom-left of the *window*. Y grows upward.**
 
-This is what `NSView.convert(_:from: nil)` returns. It's the coord space a view's `bounds` lives in.
+This is what [`NSView.convert(_:from:)`](https://developer.apple.com/documentation/appkit/nsview) returns. It's the coord space a view's `bounds` lives in.
 
 ```
    ▲ +Y inside the window
@@ -179,3 +179,17 @@ Reel 0.4.0 is a much more solid release than 0.3 was, and most of the work was i
 Worth it. The thing is on my dock, all day, every day.
 
 Happy scrolling — across as many monitors as you like.
+
+## References
+
+**Apple class docs**
+
+- [`NSView`](https://developer.apple.com/documentation/appkit/nsview) — `convert(_:from:)` lives here
+- [`NSWindow`](https://developer.apple.com/documentation/appkit/nswindow) — `convertPoint(fromScreen:)` lives here
+- [`NSScreen`](https://developer.apple.com/documentation/appkit/nsscreen) — display geometry in AppKit-global coords
+- [`CGEvent`](https://developer.apple.com/documentation/coregraphics/cgevent) — `location` is CG (top-left primary display)
+- [`AXUIElement`](https://developer.apple.com/documentation/applicationservices/axuielement) — frames are CG
+
+**Related**
+
+- [Part 1 — Reel: writing a scrollable tiling window manager for macOS](/reel-scrollable-window-manager)

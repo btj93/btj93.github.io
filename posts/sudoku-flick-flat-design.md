@@ -33,11 +33,11 @@ Springs are *fun*. A button that gives a little bounce on tap. A cell that wiggl
 But springs do two things I don't want:
 
 1. **They overshoot.** The whole point of Sudoku Flick's aesthetic is calm. A spring that overshoots and settles is the visual equivalent of a small percussive sound — fine once, exhausting after the seventieth placement.
-2. **They have non-deterministic duration.** A `withSpring(target, { damping: 15, stiffness: 80 })` can take anywhere from 200ms to 1.2s depending on the velocity it starts with. If two animations need to land at the same time — say, a digit appearing in a cell and a conflict highlight in a peer cell — `withTiming` lines them up cleanly. `withSpring` doesn't.
+2. **They have non-deterministic duration.** A [`withSpring(target, { damping: 15, stiffness: 80 })`](https://docs.swmansion.com/react-native-reanimated/docs/animations/withSpring) can take anywhere from 200ms to 1.2s depending on the velocity it starts with. If two animations need to land at the same time — say, a digit appearing in a cell and a conflict highlight in a peer cell — [`withTiming`](https://docs.swmansion.com/react-native-reanimated/docs/animations/withTiming) lines them up cleanly. `withSpring` doesn't.
 
 So: `withTiming` with cubic easing, every time. The constraint forces me to design transitions in terms of *duration* and *easing*, which are properties I can reason about, instead of *physics*, which are properties that emerge.
 
-In Reanimated terms:
+In Reanimated terms (with [`Easing`](https://docs.swmansion.com/react-native-reanimated/docs/animations/withTiming) for the curve):
 
 ```ts
 const CAMERA_EASING = Easing.bezier(0.25, 0.1, 0.25, 1);
@@ -106,7 +106,7 @@ A few features I shipped this month that survived contact with the rule sheet:
 
 - **Draggable bottom nav.** The settings/themes/about row at the bottom can be dragged side-to-side. A subtle affordance — you don't have to drag, you can tap — and the drag uses `withTiming` snap-to-position, not springs. It works because Sudoku Flick has a deliberately small set of top-level destinations; the drag is faster than the tap for me, but the tap is the obvious thing to do for anyone else.
 
-- **Animation toggle in settings.** Required, not optional. The setting reads from the system's "Reduce Motion" preference on first launch and can be overridden by the player. Every `withTiming` call in the codebase checks this value:
+- **Animation toggle in settings.** Required, not optional. The setting reads from the system's "Reduce Motion" preference (via [`AccessibilityInfo`](https://reactnative.dev/docs/accessibilityinfo)) on first launch and can be overridden by the player. Every `withTiming` call in the codebase checks this value:
 
 ```ts
 const duration = animationsEnabled ? 200 : 0;
@@ -132,3 +132,11 @@ The puzzle generator and solver are working. Difficulty levels are stubbed in. T
 What I'm building next month: an onboarding flow that doesn't suck. Sudoku Flick is asking the player to learn a new input method, and "tap-to-place" is the muscle memory we have to overwrite. The plan is a few-screen, in-context tutorial that *only* teaches the flick. No "welcome to Sudoku Flick" marketing slide. No "here are our features" carousel. Just: here's a cell, do this, you did it.
 
 That's the topic for next time. Spring-free, of course.
+
+## References
+
+- [Reanimated `withTiming`](https://docs.swmansion.com/react-native-reanimated/docs/animations/withTiming) — also where the `Easing` module is documented
+- [Reanimated `withSpring`](https://docs.swmansion.com/react-native-reanimated/docs/animations/withSpring)
+- [easings.net](https://easings.net/) — visualization of common easing curves
+- [React Native `AccessibilityInfo`](https://reactnative.dev/docs/accessibilityinfo) — for reading the system Reduce Motion preference
+- [Part 1 — Designing Sudoku Flick](/designing-sudoku-flick)

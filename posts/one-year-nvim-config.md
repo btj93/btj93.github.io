@@ -14,7 +14,7 @@ I figured a quieter month was a good excuse to look back and write down the patt
 
 Easily the biggest one. My old setup had a single `plugins.lua` with every plugin spec, options, keys, and dependencies inline. After about thirty plugins it became unworkable.
 
-The split that stuck for me, borrowed almost verbatim from [LazyVim](https://www.lazyvim.org/):
+The split that stuck for me, borrowed almost verbatim from [LazyVim](https://www.lazyvim.org/) (a Neovim distro built on [lazy.nvim](https://github.com/folke/lazy.nvim)):
 
 ```
 lua/
@@ -62,7 +62,7 @@ The convention I settled on:
 - **General editing keymaps** (movement, escape, save, etc.) → `lua/config/keymaps.lua`.
 - **Plugin-specific keymaps** → live inside the plugin's spec under `keys = { ... }`.
 
-The lazy.nvim `keys` field is doubly nice because it triggers plugin loading. Half my plugins are now lazy-loaded purely because the only entry point is a keymap.
+The [lazy.nvim `keys` field](https://lazy.folke.io/spec/lazy_loading) is doubly nice because it triggers plugin loading. Half my plugins are now lazy-loaded purely because the only entry point is a keymap.
 
 ```lua
 return {
@@ -89,7 +89,9 @@ What stuck instead: nearly everything I do interactively goes through `<leader>`
 <leader>v      -- select to end of line
 ```
 
-When I forget what the second key is, [which-key.nvim](https://github.com/folke/which-key.nvim) shows me a menu. That's it. That's the system.
+When I forget what the second key is, [which-key.nvim](https://github.com/folke/which-key.nvim) shows me a menu.
+
+> Plugins mentioned in this post: [harpoon](https://github.com/ThePrimeagen/harpoon), [mini.files](https://github.com/echasnovski/mini.files). That's it. That's the system.
 
 It's also a lot kinder to people who pair on my machine — they can read the popup and intuit the structure instead of memorizing what `<C-S-M-F4>` means.
 
@@ -161,3 +163,13 @@ I don't have an answer yet. Probably a topic for a future post.
 For now though — the structure above has survived a year of churn, and I can find anything in my config in under five seconds. That's the only metric I really care about.
 
 Happy hacking!
+
+## References
+
+- [LazyVim](https://www.lazyvim.org/) — Neovim distro
+- [lazy.nvim](https://github.com/folke/lazy.nvim) — plugin manager
+- [lazy.nvim lazy loading](https://lazy.folke.io/spec/lazy_loading) — including the `keys` field
+- [lazy.nvim lockfile](https://lazy.folke.io/usage/lockfile) — `lazy-lock.json` semantics
+- [which-key.nvim](https://github.com/folke/which-key.nvim)
+- [harpoon](https://github.com/ThePrimeagen/harpoon)
+- [mini.files](https://github.com/echasnovski/mini.files)

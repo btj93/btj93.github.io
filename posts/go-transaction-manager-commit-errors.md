@@ -70,7 +70,7 @@ return tx.Commit()
 
 If `tx.Commit()` returns an error, what happens? The function returns the error. Good. But what state is the transaction left in?
 
-In Postgres, a `COMMIT` that fails (for example, due to a serialization failure, a deferred constraint, or a network blip mid-flush) leaves the transaction *closed* on the database side. The client-side `*sql.Tx` is also done — calling `Rollback()` on it after a failed commit just returns `sql.ErrTxDone`. So far, nothing leaks.
+In Postgres, a `COMMIT` that fails (for example, due to a [serialization failure under SERIALIZABLE](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE), a [deferred constraint](https://www.postgresql.org/docs/current/sql-set-constraints.html), or a network blip mid-flush) leaves the transaction *closed* on the database side. The client-side `*sql.Tx` is also done — calling `Rollback()` on it after a failed commit just returns [`sql.ErrTxDone`](https://pkg.go.dev/database/sql#pkg-variables). So far, nothing leaks.
 
 But the bug isn't always at the database boundary. It's at the *caller*.
 
@@ -193,7 +193,7 @@ defer func() {
 }()
 ```
 
-Why does it matter? Most of the time it doesn't — `Rollback()` on an already-committed transaction returns `sql.ErrTxDone`, and that's fine. But the `database/sql` driver also returns errors from `Rollback()` if the connection has been killed mid-transaction. If the linter is happy and you're never logging it, you'll never know.
+Why does it matter? Most of the time it doesn't — [`Rollback()`](https://pkg.go.dev/database/sql#Tx.Rollback) on an already-committed transaction returns `sql.ErrTxDone`, and that's fine. But the `database/sql` driver also returns errors from `Rollback()` if the connection has been killed mid-transaction. If the linter is happy and you're never logging it, you'll never know.
 
 The shape that finally satisfied me:
 
@@ -220,3 +220,12 @@ A handful of these have stuck with me long enough to be worth writing down:
 Going forward, I default to a transaction manager that exposes a clear `ErrCommit` and logs `Rollback()` non-trivially. The cognitive cost is small. The blast radius if I get it wrong is large.
 
 Happy committing — and rolling back!
+
+## References
+
+- Go `database/sql` package — [`pkg.go.dev/database/sql`](https://pkg.go.dev/database/sql)
+- `sql.ErrTxDone` — [`pkg.go.dev/database/sql#pkg-variables`](https://pkg.go.dev/database/sql#pkg-variables)
+- `Tx.Commit`, `Tx.Rollback` — [`pkg.go.dev/database/sql#Tx`](https://pkg.go.dev/database/sql#Tx)
+- `errors.Is` / `errors.As` / `%w` wrapping — [`pkg.go.dev/errors`](https://pkg.go.dev/errors), [`fmt.Errorf`](https://pkg.go.dev/fmt#Errorf)
+- PostgreSQL `SERIALIZABLE` and SSI — [`postgresql.org/docs/current/transaction-iso.html`](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE)
+- PostgreSQL deferred constraints (`SET CONSTRAINTS`) — [`postgresql.org/docs/current/sql-set-constraints.html`](https://www.postgresql.org/docs/current/sql-set-constraints.html)

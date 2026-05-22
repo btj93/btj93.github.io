@@ -20,7 +20,7 @@ So I added online sync. But I really, really didn't want to spoil the thing that
 
 The core decision that made everything else fall into place: from the very first launch, the user has an account. They just don't know it.
 
-Supabase makes this almost embarrassingly easy:
+[Supabase makes this almost embarrassingly easy](https://supabase.com/docs/guides/auth/auth-anonymous):
 
 ```ts
 const { data: { session } } = await supabase.auth.getSession();
@@ -31,7 +31,7 @@ if (!session) {
 
 If there's already a session in AsyncStorage, use it. If not, create an anonymous one. From the user's perspective: nothing happens. The splash screen doesn't pause, no UI changes, no permission prompt. The app boots into the puzzle as it always did.
 
-Internally though, the world is different. The user has a Supabase user ID. RLS policies pin every database row to that ID. The sync engine has somewhere to push.
+Internally though, the world is different. The user has a Supabase user ID. [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security) policies pin every database row to that ID. The sync engine has somewhere to push.
 
 The thing this eliminates is an entire class of "is sync on?" UI conditionals. There is no "sync on" toggle. There's no "create an account to back up" upsell. Backup is always on. The optional thing — and the only thing you can opt *into* — is **attaching an email** to the account so you can sign in again from a different device.
 
@@ -170,7 +170,7 @@ These numbers are stolen from how database connection pools handle stale connect
 
 ## Realtime is observational only
 
-Supabase Realtime is one of those features that's tempting to overuse.
+[Supabase Realtime](https://supabase.com/docs/guides/realtime) is one of those features that's tempting to overuse.
 
 In Sudoku Flick, Realtime does exactly one job: **notify the client that something on the server changed, so it can re-merge.** It does not deliver state changes. It does not drive UI updates directly. It's a notification stream into the same merge handlers that the foreground pull uses.
 
@@ -193,7 +193,7 @@ That property — "the merge handler is the same function regardless of where th
 
 A few non-obvious things from the build:
 
-**`updated_at` triggers are non-negotiable.** Don't try to set `updated_at = now()` in the client. Clock skew exists. Phones lie. The database is the only thing whose clock matters for "what's the latest". A simple trigger:
+**`updated_at` triggers are non-negotiable.** Don't try to set `updated_at = now()` in the client. Clock skew exists. Phones lie. The database is the only thing whose clock matters for "what's the latest". A simple [Postgres trigger](https://www.postgresql.org/docs/current/sql-createtrigger.html):
 
 ```sql
 create function touch_updated_at() returns trigger language plpgsql as $$
@@ -214,7 +214,7 @@ Easy to write, easy to forget, ruinous to debug if missing.
 
 If the email is brand new (no existing account), the upgrade is silent and lossless: the anonymous user *becomes* the email user, the user_id doesn't change, every row stays exactly where it was.
 
-**Account deletion is harder than it sounds.** "Delete my account" needs to: invalidate the session, cascade-delete every row in every table, delete the auth user, and confirm before doing it. I put it behind a two-step modal with a type-DELETE gate. The actual deletion runs in a Supabase Edge Function so the client can't get partway through and stop.
+**Account deletion is harder than it sounds.** "Delete my account" needs to: invalidate the session, cascade-delete every row in every table, delete the auth user, and confirm before doing it. I put it behind a two-step modal with a type-DELETE gate. The actual deletion runs in a [Supabase Edge Function](https://supabase.com/docs/guides/functions) so the client can't get partway through and stop.
 
 **Anonymous users still take up auth.users rows.** If you ship to a million people who launch the app once and never come back, you've made a million anon rows. Plan for a cleanup job (Supabase has a built-in policy for this; opt in). Or, if your free tier headroom is generous, just let them sit until you care.
 
@@ -238,3 +238,25 @@ Other than that, the architecture has held up. The user opens the app, it does t
 That's the feature, really. Backup as a side effect. Multi-device as a one-tap upgrade. No login wall in front of a game.
 
 Happy syncing.
+
+## References
+
+**Supabase**
+
+- [Anonymous sign-ins](https://supabase.com/docs/guides/auth/auth-anonymous)
+- [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
+- [Realtime](https://supabase.com/docs/guides/realtime)
+- [Edge Functions](https://supabase.com/docs/guides/functions)
+
+**React Native**
+
+- [AsyncStorage (community)](https://github.com/react-native-async-storage/async-storage) — RN doesn't ship a built-in any more
+
+**PostgreSQL**
+
+- [`CREATE TRIGGER`](https://www.postgresql.org/docs/current/sql-createtrigger.html)
+
+**Related**
+
+- [Saga and the outbox](/saga-and-outbox)
+- [Idempotency keys](/idempotency-keys-deduped-writes)

@@ -82,7 +82,7 @@ Three of those branches are subtle:
 
 ## The race the database has to win
 
-The whole thing hinges on step 1 being atomic. Two concurrent requests with the same key must result in exactly one winner of the insert. That's why it's `INSERT ... ON CONFLICT DO NOTHING` (Postgres) and not "SELECT then INSERT".
+The whole thing hinges on step 1 being atomic. Two concurrent requests with the same key must result in exactly one winner of the insert. That's why it's [`INSERT ... ON CONFLICT DO NOTHING`](https://www.postgresql.org/docs/current/sql-insert.html) (Postgres) and not "SELECT then INSERT".
 
 A useful sanity check: if your database doesn't support a single-statement "insert if not exists with row-level locking", you can't implement this correctly with that database. Don't reach for `SELECT ... FOR UPDATE` followed by `INSERT` — there's a window between the two where another transaction can insert under you.
 
@@ -93,7 +93,7 @@ In Postgres specifically, `INSERT ... ON CONFLICT (key) DO NOTHING RETURNING *` 
 Idempotency keys can't live forever.
 
 - **Scope per account / API client.** Two different customers can legitimately use the same key string. The primary key should be `(account_id, key)`, not `key`.
-- **Expire after some window.** 24 hours is a reasonable default for most APIs. Stripe uses 24 hours; that's not a coincidence. Long enough to cover any reasonable retry window; short enough that the table doesn't grow without bound.
+- **Expire after some window.** 24 hours is a reasonable default for most APIs. [Stripe uses 24 hours](https://docs.stripe.com/api/idempotent_requests); that's not a coincidence. Long enough to cover any reasonable retry window; short enough that the table doesn't grow without bound.
 - **Garbage-collect with a periodic job, not a `DELETE` on every request.** Per-request cleanup adds latency to every write.
 
 ```sql
@@ -140,3 +140,11 @@ A few things that I keep relearning, and that this post exists to keep me from f
 I keep coming back to this pattern because the moment you have a write endpoint that can be called from a flaky network — which is every write endpoint, ever — you need it. And the moment you need it, you really need it.
 
 Happy retrying.
+
+## References
+
+- Stripe — [Idempotent requests](https://docs.stripe.com/api/idempotent_requests)
+- PostgreSQL — [`INSERT ... ON CONFLICT`](https://www.postgresql.org/docs/current/sql-insert.html)
+- HTTP 409 Conflict — [MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/409)
+- HTTP 422 Unprocessable Content — [MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/422)
+- Related — [Saga and the outbox](/saga-and-outbox)

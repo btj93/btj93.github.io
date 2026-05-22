@@ -60,7 +60,7 @@ It's not the first time someone has tried gesture-based Sudoku input, but every 
 
 ## What the app is built on
 
-A boring choice: React Native + Expo.
+A boring choice: React Native + [Expo](https://docs.expo.dev/).
 
 - I want this on iOS and Android.
 - I do not want to learn Swift and Kotlin in parallel.
@@ -69,10 +69,10 @@ A boring choice: React Native + Expo.
 
 Expo SDK 55 it is. Plus:
 
-- `react-native-reanimated` for animation.
-- `react-native-gesture-handler` for, well, gestures. Plus a custom PanResponder for the flick logic, because the radial gesture is finer-grained than what stock gesture handlers expose.
-- `react-native-svg` for the geometric UI elements.
-- `@expo-google-fonts` for typography — currently a triplet of Urbanist (titles), DM Sans (body), and IBM Plex Mono (digits).
+- [`react-native-reanimated`](https://docs.swmansion.com/react-native-reanimated/) for animation.
+- [`react-native-gesture-handler`](https://docs.swmansion.com/react-native-gesture-handler/) for, well, gestures. Plus a custom PanResponder for the flick logic, because the radial gesture is finer-grained than what stock gesture handlers expose.
+- [`react-native-svg`](https://github.com/software-mansion/react-native-svg) for the geometric UI elements.
+- [`@expo-google-fonts`](https://github.com/expo/google-fonts) for typography — currently a triplet of Urbanist (titles), DM Sans (body), and IBM Plex Mono (digits).
 
 The big absent friend, deliberately: no game engine. The board is just SVG and React. Sudoku is not a 60fps gameplay loop; it's a puzzle. Reanimated for the few animations that do happen; React for everything else.
 
@@ -80,7 +80,7 @@ The big absent friend, deliberately: no game engine. The board is just SVG and R
 
 I keep two references open while I work on this:
 
-1. **Mini Metro.** Transit-map minimalism. Flat shapes. Two-tone color. Confident negative space. The UI gets out of the way of the thing you're doing.
+1. **[Mini Metro](https://dinopoloclub.com/games/mini-metro/).** Transit-map minimalism. Flat shapes. Two-tone color. Confident negative space. The UI gets out of the way of the thing you're doing.
 2. **A blank piece of graph paper.** Sudoku is a paper puzzle. The screen should feel like the paper, not like a casino.
 
 That gives me a set of constraints I write down on day one and refuse to break:
@@ -122,3 +122,12 @@ I'm aiming for first playable by end of February. Not "App Store ready" — just
 The thing I keep reminding myself: this is a puzzle app. Not a platform. Not a SaaS. Not a side hustle. If I never make a cent on it, I will still have used it on the train every day, and that is good enough.
 
 More soon.
+
+## References
+
+- [Expo](https://docs.expo.dev/) — managed React Native framework
+- [react-native-reanimated](https://docs.swmansion.com/react-native-reanimated/) — animation library
+- [react-native-gesture-handler](https://docs.swmansion.com/react-native-gesture-handler/) — gesture system
+- [react-native-svg](https://github.com/software-mansion/react-native-svg) — SVG primitives
+- [@expo-google-fonts](https://github.com/expo/google-fonts) — Google Fonts for Expo
+- [Mini Metro](https://dinopoloclub.com/games/mini-metro/) — the design north star

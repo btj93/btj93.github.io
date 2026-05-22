@@ -19,7 +19,7 @@ It's deliberately generic. Patterns, not specifics. Any resemblance to a system 
 Before any process discussion, the project needs an answer to *why*. "Ruby is slow" is not an answer. Specific, measurable answers I've seen earn the migration:
 
 - **Concurrency primitives.** A Rails monolith with a Sidekiq fleet can absolutely handle scale, but expressing "fan out, do twelve things in parallel, collect results, all under a deadline" is awkward. Go's goroutines + contexts make this a five-line function.
-- **Decimal arithmetic and type safety on money.** Ruby's `BigDecimal` works, but Ruby's *type system* lets a float sneak into a money calculation and you'll find it in a customer-facing invoice. A Go codebase with a `money.Amount` type that has no float constructor catches the bug at compile time.
+- **Decimal arithmetic and type safety on money.** Ruby's [`BigDecimal`](https://docs.ruby-lang.org/en/master/BigDecimal.html) works, but Ruby's *type system* lets a float sneak into a money calculation and you'll find it in a customer-facing invoice. A Go codebase with a `money.Amount` type that has no float constructor catches the bug at compile time.
 - **Boot time and memory.** A Rails worker takes hundreds of MB and seconds to boot. A Go worker takes tens of MB and milliseconds. For a billing system that scales horizontally during end-of-month spikes, the difference compounds in your cloud bill.
 - **Operational consistency with the rest of your stack.** If everything else is Go and the billing system is the lone Rails outlier, on-call engineers pay a tax every time they touch it.
 
@@ -50,7 +50,7 @@ The deliverable from Phase 0 is a single document — call it the *domain audit*
 - What are the invariants? (an invoice's `total` must equal the sum of its line items, post-tax; a subscription cannot be `active` without a `current_period_end` in the future; a refund cannot exceed the original payment's amount)
 - What are the integrations? (payment provider, tax provider, accounting export, dunning emails, webhooks in, webhooks out)
 - What are the recurring jobs and what do they do? (renewal cron, dunning cron, currency conversion, reconciliation)
-- Where does the system *talk to itself*? (ActiveRecord callbacks, model observers, after_commit hooks, anything that fires implicitly)
+- Where does the system *talk to itself*? ([ActiveRecord callbacks](https://guides.rubyonrails.org/active_record_callbacks.html), model observers, after_commit hooks, anything that fires implicitly)
 
 That last one is the killer in a Rails-to-Go migration. Rails callbacks are the great hidden coupling of every Rails app. Every `after_save :recalculate_balance` is a side effect the Go rewrite will need to replicate explicitly, and you won't notice the missing one until a customer's balance is wrong.
 
@@ -156,7 +156,7 @@ This phase will last longer than you expect.
 
 ### Strategy 2: Dual write through an anti-corruption layer
 
-When Go starts writing, you don't let it write directly to the shared Rails schema. You introduce an **anti-corruption layer** (ACL) on the Rails side — a small, explicit Ruby module whose only job is to accept calls from Go and translate them into the Rails idioms.
+When Go starts writing, you don't let it write directly to the shared Rails schema. You introduce an **[anti-corruption layer](https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer)** (ACL) on the Rails side — a small, explicit Ruby module whose only job is to accept calls from Go and translate them into the Rails idioms. (The pattern itself was coined by Eric Evans in *Domain-Driven Design* and is often paired with [Martin Fowler's Strangler Fig](https://martinfowler.com/bliki/StranglerFigApplication.html) approach.)
 
 ```ruby
 module Acl
@@ -266,7 +266,7 @@ This is true for any rolling deployment, but it's *especially* true when "both s
 
 ### Background jobs are their own migration
 
-Sidekiq jobs don't magically become Go workers. A typical Rails billing system has dozens of jobs — renewal, dunning, reconciliation, currency conversion, webhook retries, report generation. Each one needs a Go equivalent, and the transition has the same shadow / cutover / decommission shape as the HTTP API.
+[Sidekiq](https://github.com/sidekiq/sidekiq) jobs don't magically become Go workers. A typical Rails billing system has dozens of jobs — renewal, dunning, reconciliation, currency conversion, webhook retries, report generation. Each one needs a Go equivalent, and the transition has the same shadow / cutover / decommission shape as the HTTP API.
 
 A trap: jobs that *enqueue other jobs*. If your Go renewal worker enqueues a Sidekiq dunning job by name, you've coupled the two systems' queues. Untangling that mid-migration is painful. Decide early: do you bridge the queues (Go enqueues via Sidekiq's Redis protocol), or do you migrate both producer and consumer together?
 
@@ -280,7 +280,7 @@ Distributed locks help — a row in a `cron_locks` table with `(job_name, run_da
 
 Ruby and Go have radically different concurrency models. A Rails app with a pool of 25 DB connections per Puma worker is reasonable. A Go app with the same per-process pool size will exhaust the database under the same load, because Go can have *thousands* of goroutines waiting on those 25 connections.
 
-Calculate the database's max connections, divide by the number of Go pods, divide again by a safety factor, and that's your `db.SetMaxOpenConns`. Don't copy the Rails number.
+Calculate the database's max connections, divide by the number of Go pods, divide again by a safety factor, and that's your [`db.SetMaxOpenConns`](https://pkg.go.dev/database/sql#DB.SetMaxOpenConns). Don't copy the Rails number.
 
 ### Webhooks in and out
 
@@ -343,3 +343,29 @@ A handful that are easy to write down and surprisingly hard to internalize:
 I have left out a lot — currency conversion, tax engines, accounting exports, regulatory holds, the joy of trying to explain dunning to a non-billing engineer. Maybe future posts. For now: if you're about to start one of these, take the phase map, take Phase 0 seriously, and remember that the migration is the project.
 
 Good luck. And mind your cents.
+
+## References
+
+**Patterns**
+
+- [Strangler Fig Application — Martin Fowler](https://martinfowler.com/bliki/StranglerFigApplication.html)
+- [Anti-Corruption Layer pattern — Microsoft / Azure Architecture Center](https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer)
+- [Saga pattern (microservices.io)](https://microservices.io/patterns/data/saga.html)
+- [Transactional outbox pattern (microservices.io)](https://microservices.io/patterns/data/transactional-outbox.html)
+
+**Rails / Ruby**
+
+- [Active Record Callbacks — Rails Guides](https://guides.rubyonrails.org/active_record_callbacks.html)
+- [Sidekiq](https://github.com/sidekiq/sidekiq)
+- [`BigDecimal` — Ruby standard library](https://docs.ruby-lang.org/en/master/BigDecimal.html)
+
+**Go**
+
+- [`database/sql`](https://pkg.go.dev/database/sql) — including [`SetMaxOpenConns`](https://pkg.go.dev/database/sql#DB.SetMaxOpenConns)
+
+**Related posts**
+
+- [The Go transaction manager bug that ate my rollback](/go-transaction-manager-commit-errors)
+- [MySQL transactions — same Go pattern, different ways to lose](/mysql-transactions-silent-rollback)
+- [Idempotency keys](/idempotency-keys-deduped-writes)
+- [Saga and the outbox](/saga-and-outbox)

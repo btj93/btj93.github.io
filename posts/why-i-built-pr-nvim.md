@@ -44,7 +44,7 @@ Reasons:
 - I would have to reimplement auth flows for every provider — GitHub PATs, GitHub Apps, GitLab tokens, Bitbucket app passwords.
 - I would have to track and update every provider's REST/GraphQL schema.
 - I would have to handle rate limits, retries, pagination — all the messy bits.
-- And then I'd have a Neovim plugin that does HTTP. There's already a tool that does HTTP per provider, and *I already have it installed*: `gh`, `glab`, `curl`.
+- And then I'd have a Neovim plugin that does HTTP. There's already a tool that does HTTP per provider, and *I already have it installed*: [`gh`](https://cli.github.com/), [`glab`](https://gitlab.com/gitlab-org/cli), `curl`.
 
 So the plugin shells out. Provider abstraction becomes a tiny strategy interface:
 
@@ -89,7 +89,7 @@ This buys me a few things I didn't fully appreciate at first:
 
 This was the second decision that paid off out of all proportion.
 
-Review comments are conceptually just diagnostics. They have a location (file + line), a severity, and a message. Neovim already has a beautifully designed API for displaying those: `vim.diagnostic`.
+Review comments are conceptually just diagnostics. They have a location (file + line), a severity, and a message. Neovim already has a beautifully designed API for displaying those: [`vim.diagnostic`](https://neovim.io/doc/user/diagnostic.html).
 
 So pr.nvim publishes review threads as diagnostics in a dedicated namespace:
 
@@ -152,11 +152,11 @@ The other piece is the floating window — the one that opens when you hit `<CR>
 
 I tried implementing it from scratch with `nvim_open_win`. Bad time. There's the popup itself, but then there's a header, a body, a reply input, scrolling, focus management between header and body, key dispatch, layout on resize, layout on small screens, layout on multiple monitors...
 
-The thing that saved me was [`nui.nvim`](https://github.com/MunifTanjim/nui.nvim). It's a UI-primitives library — popups, layouts, menus — and it does the chore work I really did not want to do. After switching to it, the popup code roughly halved and the bug count fell off a cliff.
+The thing that saved me was [`nui.nvim`](https://github.com/MunifTanjim/nui.nvim). It's a UI-primitives library — popups, layouts, menus — and it does the chore work I really did not want to do. After switching to it, the popup code roughly halved and the bug count fell off a cliff. Async subprocess handling is via [`plenary.nvim`](https://github.com/nvim-lua/plenary.nvim).
 
 ## Picker as control surface
 
-The other thing that has scaled well: pickers (snacks / telescope / fzf) as the central control surface.
+The other thing that has scaled well: pickers ([snacks.nvim](https://github.com/folke/snacks.nvim) / [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) / [fzf-lua](https://github.com/ibhagwan/fzf-lua)) as the central control surface.
 
 Rather than have a custom UI for "list PRs", "list threads", "switch filters" — every list-shaped thing is a picker entry. Users pick the picker they already use. The plugin defines actions on entries; the picker handles fuzzy matching, preview, multi-select, the works.
 
@@ -186,3 +186,26 @@ There's a *lot* more I want to do — drafts that survive across sessions, full 
 For now, the headline is: I haven't switched tabs to read a review comment in six weeks. That alone has been worth the build.
 
 Happy reviewing!
+
+## References
+
+**Plugin runtime**
+
+- [nui.nvim](https://github.com/MunifTanjim/nui.nvim) — UI primitives
+- [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) — async helpers
+
+**Provider CLIs**
+
+- [GitHub CLI (`gh`)](https://cli.github.com/)
+- [GitLab CLI (`glab`)](https://gitlab.com/gitlab-org/cli)
+
+**Pickers**
+
+- [snacks.nvim](https://github.com/folke/snacks.nvim)
+- [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim)
+- [fzf-lua](https://github.com/ibhagwan/fzf-lua)
+
+**Neovim APIs**
+
+- [`vim.diagnostic`](https://neovim.io/doc/user/diagnostic.html) — diagnostic publishing/jumping
+- [Lua API (`nvim_create_namespace` etc.)](https://neovim.io/doc/user/api.html)

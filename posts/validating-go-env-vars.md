@@ -255,3 +255,12 @@ A handful that I keep relearning:
 The whole pattern is small. The bugs it prevents are big. Worth the 150 lines.
 
 Happy starting up!
+
+## References
+
+- `os.LookupEnv` — [`pkg.go.dev/os#LookupEnv`](https://pkg.go.dev/os#LookupEnv)
+- `reflect` package and `StructTag` — [`pkg.go.dev/reflect`](https://pkg.go.dev/reflect), [`pkg.go.dev/reflect#StructTag`](https://pkg.go.dev/reflect#StructTag)
+- `strconv` for type coercion — [`pkg.go.dev/strconv`](https://pkg.go.dev/strconv)
+- `time.ParseDuration` — [`pkg.go.dev/time#ParseDuration`](https://pkg.go.dev/time#ParseDuration)
+- `errors.Join` — [`pkg.go.dev/errors#Join`](https://pkg.go.dev/errors#Join)
+- `os.Exit` — [`pkg.go.dev/os#Exit`](https://pkg.go.dev/os#Exit)
