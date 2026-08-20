@@ -21,12 +21,10 @@ I keep ending up with the same pattern. Time to write it down before I have to i
 When I introduce errors at the boundary of a Go service, here's the contract I keep wanting:
 
 1. **A single shape.** Frontends should be able to decode every error response with the same struct.
-2. **A machine-readable code.** The HTTP status alone isn't enough — `400 Bad Request` could be twenty different things. The body needs to name the thing.
+2. **A machine-readable code.** The HTTP status alone isn't enough. `400 Bad Request` could be twenty different things, so the body needs to name the thing.
 3. **A safe message.** The user-facing detail should *never* leak a wrapped error. If something says `pq: duplicate key value violates unique constraint "users_email_key"`, that's an internal detail. The response should say "email already taken".
 4. **Optional metadata.** A `meta` object that endpoints can fill with structured context: a field name, a retry-after, a request ID, whatever.
 5. **No global mutation.** Building an error should be a pure function on the input. No `WithRequestID()` that secretly stuffs things into a package-level map.
-
-That's the bar.
 
 ## The response shape
 
@@ -45,7 +43,7 @@ I always end up with something close to this:
 }
 ```
 
-`code` is a short PascalCase enum value. `detail` is a sentence I'd be okay showing to the user. `meta` is an open-ended object — but every field in it is *added on purpose*. No "throw the wrapped error in there and let the frontend figure it out".
+`code` is a short PascalCase enum value. `detail` is a sentence I'd be okay showing to the user. `meta` is an open-ended object, but every field in it is *added on purpose*. No "throw the wrapped error in there and let the frontend figure it out".
 
 ## The Go side
 
@@ -152,7 +150,7 @@ func (e *Error) WithField(key string, value any) *Error {
 }
 ```
 
-Why immutable? Because the alternative — mutating in place — surprises you the moment you reuse a base error:
+Why immutable? Because mutating in place surprises you the moment you reuse a base error:
 
 ```go
 var ErrInvalidParam = httperror.BadRequest(ErrCodeInvalidParam, errors.New("invalid"))
@@ -187,7 +185,7 @@ func ErrorHandler(err error, c echo.Context) {
 }
 ```
 
-Critically, the framework integration is *separate* from the core type. The core `Error` doesn't import `echo` or `gin` or `chi`. That way you can swap frameworks without rewriting your error vocabulary.
+The framework integration is *separate* from the core type. The core `Error` doesn't import `echo` or `gin` or `chi`. That way you can swap frameworks without rewriting your error vocabulary.
 
 A pattern I've seen go wrong is when the error library directly returns `echo.HTTPError`, coupling the entire codebase to one framework. Don't. Keep the error type pure data; let an adapter translate.
 
@@ -224,8 +222,8 @@ Happy erroring!
 
 ## References
 
-- Go `errors` package — [`pkg.go.dev/errors`](https://pkg.go.dev/errors) (covers `Is`, `As`, `Unwrap`, `Join`)
-- `fmt.Errorf` and the `%w` verb — [`pkg.go.dev/fmt#Errorf`](https://pkg.go.dev/fmt#Errorf)
-- Go `encoding/json` package — [`pkg.go.dev/encoding/json`](https://pkg.go.dev/encoding/json) (custom `MarshalJSON`)
-- Go `net/http` status code constants — [`pkg.go.dev/net/http`](https://pkg.go.dev/net/http)
-- Echo web framework — [`echo.labstack.com`](https://echo.labstack.com/)
+- Go `errors` package: [`pkg.go.dev/errors`](https://pkg.go.dev/errors) (covers `Is`, `As`, `Unwrap`, `Join`)
+- `fmt.Errorf` and the `%w` verb: [`pkg.go.dev/fmt#Errorf`](https://pkg.go.dev/fmt#Errorf)
+- Go `encoding/json` package: [`pkg.go.dev/encoding/json`](https://pkg.go.dev/encoding/json) (custom `MarshalJSON`)
+- Go `net/http` status code constants: [`pkg.go.dev/net/http`](https://pkg.go.dev/net/http)
+- Echo web framework: [`echo.labstack.com`](https://echo.labstack.com/)

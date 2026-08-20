@@ -8,9 +8,7 @@ permalink: /go-transaction-manager-commit-errors
 
 I've been writing Go for a while now, and like every other Go shop on earth, somewhere in the codebase there is a function called something like `WithTx`, `RunInTx`, or `TransactionManager.Execute`. It opens a transaction, runs a callback, and commits at the end.
 
-It looks innocent. It is *not* innocent.
-
-This post is about a subtle bug I shipped in my own implementation of the pattern — the kind where everything looks correct, every test passes, and yet under specific failure modes the transaction silently leaks.
+This post is about a subtle bug I shipped in my own implementation of the pattern. Everything looks correct, every test passes, and yet under specific failure modes the transaction silently leaks.
 
 ## The shape of the pattern
 
@@ -56,13 +54,9 @@ err := tx.Do(ctx, func(ctx context.Context) error {
 })
 ```
 
-Lovely. Clean. Composable.
-
 Now where's the bug?
 
 ## The bug: a commit can fail too
-
-Look at the last line again.
 
 ```go
 return tx.Commit()
@@ -70,9 +64,9 @@ return tx.Commit()
 
 If `tx.Commit()` returns an error, what happens? The function returns the error. Good. But what state is the transaction left in?
 
-In Postgres, a `COMMIT` that fails (for example, due to a [serialization failure under SERIALIZABLE](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE), a [deferred constraint](https://www.postgresql.org/docs/current/sql-set-constraints.html), or a network blip mid-flush) leaves the transaction *closed* on the database side. The client-side `*sql.Tx` is also done — calling `Rollback()` on it after a failed commit just returns [`sql.ErrTxDone`](https://pkg.go.dev/database/sql#pkg-variables). So far, nothing leaks.
+In Postgres, a `COMMIT` that fails (for example, due to a [serialization failure under SERIALIZABLE](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE), a [deferred constraint](https://www.postgresql.org/docs/current/sql-set-constraints.html), or a network blip mid-flush) leaves the transaction *closed* on the database side. The client-side `*sql.Tx` is also done, so calling `Rollback()` on it after a failed commit just returns [`sql.ErrTxDone`](https://pkg.go.dev/database/sql#pkg-variables). So far, nothing leaks.
 
-But the bug isn't always at the database boundary. It's at the *caller*.
+The bug is at the *caller*.
 
 The caller wraps `tx.Do` like this:
 
@@ -91,7 +85,7 @@ if err != nil {
 publishEvent(...)
 ```
 
-Now imagine `fn` returned `nil`, but `tx.Commit()` returned an error. From the caller's point of view, they get an error back from `txManager.Do`. That's correct — but they don't know **whether the failure was inside `fn` (no rows written) or inside `Commit` (rows possibly written, or possibly not, depending on where in the commit pipeline the error happened)**.
+Now imagine `fn` returned `nil`, but `tx.Commit()` returned an error. From the caller's point of view, they get an error back from `txManager.Do`. That's correct, but they don't know **whether the failure was inside `fn` (no rows written) or inside `Commit` (rows possibly written, or possibly not, depending on where in the commit pipeline the error happened)**.
 
 That ambiguity is the bug.
 
@@ -125,14 +119,12 @@ func (m *txManager) Do(ctx context.Context, fn func(ctx context.Context) error) 
 }
 ```
 
-Two things wrong here:
-
-1. The `tx.Rollback()` after a failed `Commit()` does nothing useful — and the swallowed `sql.ErrTxDone` made it look like I was handling things when I wasn't.
-2. The error returned is just `err` — there's no way for the caller to tell whether the application code failed or the commit did.
+1. The `tx.Rollback()` after a failed `Commit()` does nothing useful, and the swallowed `sql.ErrTxDone` made it look like I was handling things when I wasn't.
+2. The error returned is just `err`, so there's no way for the caller to tell whether the application code failed or the commit did.
 
 ## The fix: classify the error
 
-The cleanest fix is to wrap commit errors in a typed error, so the caller can act differently:
+The fix is to wrap commit errors in a typed error, so the caller can act differently:
 
 ```go
 var ErrCommit = errors.New("commit failed")
@@ -181,7 +173,7 @@ if err := txManager.Do(ctx, fn); err != nil {
 }
 ```
 
-I find this distinction useful exactly because it forces me to name the thing. "Commit failed" is not the same as "the business logic rejected this request" and lumping them together makes the recovery story muddier than it needs to be.
+I find this distinction useful because it forces me to name the thing. "Commit failed" is not the same as "the business logic rejected this request" and lumping them together makes the recovery story muddier than it needs to be.
 
 ## A second bug that hid for weeks
 
@@ -193,7 +185,7 @@ defer func() {
 }()
 ```
 
-Why does it matter? Most of the time it doesn't — [`Rollback()`](https://pkg.go.dev/database/sql#Tx.Rollback) on an already-committed transaction returns `sql.ErrTxDone`, and that's fine. But the `database/sql` driver also returns errors from `Rollback()` if the connection has been killed mid-transaction. If the linter is happy and you're never logging it, you'll never know.
+Why does it matter? Most of the time it doesn't. [`Rollback()`](https://pkg.go.dev/database/sql#Tx.Rollback) on an already-committed transaction returns `sql.ErrTxDone`, and that's fine. But the `database/sql` driver also returns errors from `Rollback()` if the connection has been killed mid-transaction. If the linter is happy and you're never logging it, you'll never know.
 
 The shape that finally satisfied me:
 
@@ -205,27 +197,25 @@ defer func() {
 }()
 ```
 
-Loud enough to find in logs. Quiet enough to not page anyone in the night.
+Loud enough to find in logs, quiet enough to not page anyone in the night.
 
 ## Lessons I keep relearning
 
-A handful of these have stuck with me long enough to be worth writing down:
-
 1. **`Commit()` is a write.** Treat it like one. It can fail, and the failure mode is different from "business logic failed".
-2. **Don't `Rollback()` after `Commit()` errored** — it just returns `ErrTxDone` and pollutes the call site with a useless line of code.
+2. **Don't `Rollback()` after `Commit()` errored.** It just returns `ErrTxDone` and pollutes the call site with a useless line of code.
 3. **Wrap commit errors in a sentinel.** It makes recovery code possible to write.
 4. **Don't silently swallow `Rollback()` errors.** Most of them are fine. The ones that aren't are the ones you want to see.
-5. **Tests rarely exercise commit failure.** If you care about the path, build a fake driver that can be told to fail at commit time. A `httptest.Server`-style escape hatch — but for `database/sql/driver` — does wonders.
+5. **Tests rarely exercise commit failure.** If you care about the path, build a fake driver that can be told to fail at commit time. A `httptest.Server`-style escape hatch for `database/sql/driver` does wonders.
 
-Going forward, I default to a transaction manager that exposes a clear `ErrCommit` and logs `Rollback()` non-trivially. The cognitive cost is small. The blast radius if I get it wrong is large.
+Going forward, I default to a transaction manager that exposes a clear `ErrCommit` and logs `Rollback()` non-trivially.
 
-Happy committing — and rolling back!
+Happy committing, and rolling back!
 
 ## References
 
-- Go `database/sql` package — [`pkg.go.dev/database/sql`](https://pkg.go.dev/database/sql)
-- `sql.ErrTxDone` — [`pkg.go.dev/database/sql#pkg-variables`](https://pkg.go.dev/database/sql#pkg-variables)
-- `Tx.Commit`, `Tx.Rollback` — [`pkg.go.dev/database/sql#Tx`](https://pkg.go.dev/database/sql#Tx)
-- `errors.Is` / `errors.As` / `%w` wrapping — [`pkg.go.dev/errors`](https://pkg.go.dev/errors), [`fmt.Errorf`](https://pkg.go.dev/fmt#Errorf)
-- PostgreSQL `SERIALIZABLE` and SSI — [`postgresql.org/docs/current/transaction-iso.html`](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE)
-- PostgreSQL deferred constraints (`SET CONSTRAINTS`) — [`postgresql.org/docs/current/sql-set-constraints.html`](https://www.postgresql.org/docs/current/sql-set-constraints.html)
+- Go `database/sql` package: [`pkg.go.dev/database/sql`](https://pkg.go.dev/database/sql)
+- `sql.ErrTxDone`: [`pkg.go.dev/database/sql#pkg-variables`](https://pkg.go.dev/database/sql#pkg-variables)
+- `Tx.Commit`, `Tx.Rollback`: [`pkg.go.dev/database/sql#Tx`](https://pkg.go.dev/database/sql#Tx)
+- `errors.Is` / `errors.As` / `%w` wrapping: [`pkg.go.dev/errors`](https://pkg.go.dev/errors), [`fmt.Errorf`](https://pkg.go.dev/fmt#Errorf)
+- PostgreSQL `SERIALIZABLE` and SSI: [`postgresql.org/docs/current/transaction-iso.html`](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE)
+- PostgreSQL deferred constraints (`SET CONSTRAINTS`): [`postgresql.org/docs/current/sql-set-constraints.html`](https://www.postgresql.org/docs/current/sql-set-constraints.html)

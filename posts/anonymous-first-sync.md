@@ -6,19 +6,19 @@ permalink: /anonymous-first-sync
 
 # Anonymous-first sync — adding online to an offline-first puzzle app
 
-Sudoku Flick has been fully offline since day one. You install it, you play it, you never touch the network. That's a deliberate design choice — it's a puzzle, not a service, and your statistics live on your phone.
+Sudoku Flick has been fully offline since day one. You install it, you play it, you never touch the network. That was deliberate. It's a puzzle, not a service, and your statistics live on your phone.
 
 Then I got the request I'd been quietly dreading: *"I just got a new iPad. Can I move my progress?"*
 
 The honest answer was no. The progress was sitting in `AsyncStorage` on the old phone, and unless you wanted to read JSON out of a `tar` of an iOS backup, that was where it stayed.
 
-So I added online sync. But I really, really didn't want to spoil the thing that made the app pleasant in the first place — no account walls, no "sign in to play", no email gate on first launch. This post is about how I squared that circle.
+So I added online sync. But I really, really didn't want to spoil the thing that made the app pleasant in the first place: no account walls, no "sign in to play", no email gate on first launch.
 
 <div class="github-card" data-github="btj93/sudoku-flick" data-width="400" data-height="" data-theme="default"></div>
 
 ## The principle: the user is *always* signed in
 
-The core decision that made everything else fall into place: from the very first launch, the user has an account. They just don't know it.
+From the very first launch, the user has an account. They just don't know it.
 
 [Supabase makes this almost embarrassingly easy](https://supabase.com/docs/guides/auth/auth-anonymous):
 
@@ -33,17 +33,17 @@ If there's already a session in AsyncStorage, use it. If not, create an anonymou
 
 Internally though, the world is different. The user has a Supabase user ID. [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security) policies pin every database row to that ID. The sync engine has somewhere to push.
 
-The thing this eliminates is an entire class of "is sync on?" UI conditionals. There is no "sync on" toggle. There's no "create an account to back up" upsell. Backup is always on. The optional thing — and the only thing you can opt *into* — is **attaching an email** to the account so you can sign in again from a different device.
+This eliminates an entire class of "is sync on?" UI conditionals. There is no "sync on" toggle. There's no "create an account to back up" upsell. Backup is always on. The only thing you can opt *into* is **attaching an email** to the account so you can sign in again from a different device.
 
-That distinction (the account exists from day one; the email is the upgrade) is the entire UX story. Once I phrased it that way to myself, every other product decision wrote itself.
+The account exists from day one, and the email is the upgrade. Once I phrased it that way to myself, the rest of the product decisions were easy.
 
 ## Local-first, observed-from-outside
 
-The second decision: existing app code does not learn about sync.
+Existing app code does not learn about sync.
 
-Sudoku Flick has a stack of React hooks — `useStatistics`, `useAchievements`, `useSudokuGame`, `useUsername`, `useDailyChallenge`. Every one of them reads from and writes to AsyncStorage. They've been the source of truth on-device for a year. I did not want to rewrite them.
+Sudoku Flick has a stack of React hooks: `useStatistics`, `useAchievements`, `useSudokuGame`, `useUsername`, `useDailyChallenge`. Every one of them reads from and writes to AsyncStorage. They've been the source of truth on-device for a year. I did not want to rewrite them.
 
-The shape that worked: a new `SyncEngine` module that observes the existing write sites via small explicit calls, and feeds incoming changes back through the same hooks via subscription events.
+So I added a new `SyncEngine` module that observes the existing write sites via small explicit calls, and feeds incoming changes back through the same hooks via subscription events.
 
 ```
 ┌── existing hook ──┐         ┌── SyncEngine ──┐
@@ -70,20 +70,20 @@ async function saveGameRecord(record: GameRecord) {
 }
 ```
 
-One line. The hook still works without the network. The hook still works if Supabase is down. The hook still works if the user has the airplane mode on.
+One line. The hook still works without the network, and it still works if Supabase is down.
 
-The principle: **the source of truth is local.** The server is a mirror.
+**The source of truth is local.** The server is a mirror.
 
-Two alternative approaches I considered and rejected up front:
+Other approaches I considered and rejected up front:
 
 - **Direct mirror.** Each AsyncStorage write directly pushes to Supabase. Each pull overwrites local. Sounds clean. Breaks the moment you're offline (because the next pull blows away the unpushed write). Tightly couples your storage schema to your DB schema, so every storage refactor becomes a migration.
 - **Event-sourced log.** Every change is an immutable event. State replays from the stream. Beautiful in theory. Wildly over-engineered for a single-player puzzle game. You'd be writing event-sourcing infrastructure for the rest of time and the only thing the user cares about is whether their trophy count is right on the new device.
 
-The "local + outbox + per-entity merge" middle path is the boring answer. It happens to be correct.
+The "local + outbox + per-entity merge" middle path is the boring answer.
 
 ## The outbox lives in AsyncStorage too
 
-The other piece is the outbox — the queue of changes waiting to be pushed.
+The other piece is the outbox, the queue of changes waiting to be pushed.
 
 I considered an in-memory queue. A few hours of thinking about "what happens if the app is force-killed mid-flight" convinced me otherwise. The outbox needs to survive crashes. AsyncStorage is right there.
 
@@ -99,7 +99,7 @@ async function enqueue(op: SyncOp) {
 }
 ```
 
-`triggerDrain` is a debounced "go push the queue" function. It runs in the background and processes items in order. On success, the item is removed. On a retryable failure (network, 5xx), it stays in the queue and is retried later. On a terminal failure (an `INSERT` that violates a constraint that should never violate), it's logged loudly and discarded — but that should never happen, and if it does, I'd rather know than retry forever.
+`triggerDrain` is a debounced "go push the queue" function. It runs in the background and processes items in order. On success, the item is removed. On a retryable failure (network, 5xx), it stays in the queue and is retried later. On a terminal failure (an `INSERT` that violates a constraint that should never violate), it's logged loudly and discarded. That should never happen, and if it does, I'd rather know than retry forever.
 
 A nicety I added late: when the user signs in with email for the first time, the outbox is *flushed* before the merge happens. Otherwise you'd have pending pushes against the old anonymous user ID that suddenly belong to a different user.
 
@@ -118,11 +118,9 @@ Sudoku Flick has six syncable entities, and each one needed its own answer:
 | `active_game` | Single-active-device lock. (See below.) |
 | `daily_challenges` | Last-write-wins on `updated_at`, keyed per-day. |
 
-Two things to notice.
+**Most entities don't conflict.** Achievements are sets: you either have a trophy or you don't, and unlocking it again is a no-op. Game records are append-only. Once you finished puzzle `game_1748432312`, that record exists forever, and the only "conflict" is "we both inserted it", which `INSERT ... ON CONFLICT (id) DO NOTHING` makes fine. Most of the sync surface is *trivially* idempotent.
 
-**1. Most entities don't conflict.** Achievements are sets — you either have a trophy or you don't, and unlocking it again is a no-op. Game records are append-only — once you finished puzzle `game_1748432312`, that record exists forever; the only "conflict" is "we both inserted it" and `INSERT ... ON CONFLICT (id) DO NOTHING` makes that fine. Most of the sync surface is *trivially* idempotent.
-
-**2. The active game is the one that's actually hard.** Mid-puzzle state — your current digits, your notes, your hint count, your elapsed time — *can* be edited from two devices, and last-write-wins would lose data. That one needs a real lock.
+**The active game is the hard one.** Mid-puzzle state (your current digits, your notes, your hint count, your elapsed time) *can* be edited from two devices, and last-write-wins would lose data. That one needs a real lock.
 
 ## The active-game lock
 
@@ -160,13 +158,13 @@ return promptTakeover(active);
 
 The takeover modal is the user-facing piece: *"You're playing this game on your iPad. Continue here (your iPad will stop)?"* If you confirm, your device writes the row with its own `device_id`. The iPad's debounced push will fail to claim the lock on next attempt and the iPad will show a "this game is now active on another device" overlay.
 
-The thresholds matter:
+The thresholds:
 
 - **1s debounce on push.** Frequent enough that takeover sees fresh state; sparse enough that you're not battering Supabase on every digit.
 - **10s idle keepalive.** Even if you haven't touched the puzzle, the lock stays warm.
 - **30s staleness threshold.** Longer than two missed keepalives, short enough that the old device's crash doesn't strand the puzzle for hours.
 
-These numbers are stolen from how database connection pools handle stale connections, which is a problem space that has been thinking about this for forty years.
+These numbers are stolen from how database connection pools handle stale connections, which is a problem people have been working on for forty years.
 
 ## Realtime is observational only
 
@@ -185,13 +183,11 @@ supabase
 
 `handleIncoming` is the same function the foreground pull calls when it fetches records. It writes to AsyncStorage, then emits the local change event the hook is listening for. The hook re-renders.
 
-Why this matters: **echoes are absorbed naturally**. When I push a record from device A, Realtime fires on device A *and* device B. On A, the merge is a no-op (the record is already there with that exact content). On B, the merge inserts the row. There's no "did this come from me?" filtering needed because the merge handler is genuinely idempotent.
+**Echoes are absorbed naturally.** When I push a record from device A, Realtime fires on device A *and* device B. On A, the merge is a no-op (the record is already there with that exact content). On B, the merge inserts the row. There's no "did this come from me?" filtering needed because the merge handler is genuinely idempotent.
 
-That property — "the merge handler is the same function regardless of where the data came from" — is what made the whole thing testable. I have a single function I can throw any payload at, from any source, and verify the local state ends up right.
+Because the merge handler is the same function regardless of where the data came from, the whole thing is testable. I have a single function I can throw any payload at, from any source, and verify the local state ends up right.
 
 ## A few sharp edges I hit
-
-A few non-obvious things from the build:
 
 **`updated_at` triggers are non-negotiable.** Don't try to set `updated_at = now()` in the client. Clock skew exists. Phones lie. The database is the only thing whose clock matters for "what's the latest". A simple [Postgres trigger](https://www.postgresql.org/docs/current/sql-createtrigger.html):
 
@@ -220,22 +216,18 @@ If the email is brand new (no existing account), the upgrade is silent and lossl
 
 ## What this is *not*
 
-A few things to set expectations:
-
 - **It's not multiplayer.** There's no realtime co-solving. Two devices for the same user, yes; two users for the same puzzle, no.
 - **It's not CRDT.** The conflict resolution is per-entity strategies, not a general merge function. That's fine because the data is shaped to make conflict rare.
 - **It's not zero-latency UI.** Reads come from local; UI is instant. Writes are eventually pushed. If you require "what I see is exactly what the server thinks", this isn't that. (For a Sudoku app, this is fine. For your bank app, it isn't.)
 
 ## What I'd do differently
 
-Two things I'd plan for from day one if I were doing it again:
+Things I'd plan for from day one if I were doing it again:
 
 1. **Treat the outbox as a first-class data structure from commit one.** I retrofitted it after a week of "just queue it in memory". The retrofit was small but emotional.
 2. **Decide on `updated_at` conventions before writing the first table.** I had three tables with three slightly different "what does updated_at mean?" definitions before I noticed. The triggers fixed it but the merge code briefly disagreed with itself.
 
-Other than that, the architecture has held up. The user opens the app, it does the offline thing, and somewhere off in the background — across networks, across devices, across reinstalls — their progress is being faithfully mirrored, without ever having asked them to make an account.
-
-That's the feature, really. Backup as a side effect. Multi-device as a one-tap upgrade. No login wall in front of a game.
+Other than that, the architecture has held up. The user opens the app, it does the offline thing, and somewhere in the background their progress is being faithfully mirrored across networks, devices and reinstalls, without ever having asked them to make an account.
 
 Happy syncing.
 
@@ -250,7 +242,7 @@ Happy syncing.
 
 **React Native**
 
-- [AsyncStorage (community)](https://github.com/react-native-async-storage/async-storage) — RN doesn't ship a built-in any more
+- [AsyncStorage (community)](https://github.com/react-native-async-storage/async-storage) (RN doesn't ship a built-in any more)
 
 **PostgreSQL**
 

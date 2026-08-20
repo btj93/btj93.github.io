@@ -9,7 +9,7 @@ permalink: /validating-go-env-vars
 There's a particular flavor of production bug that I find especially upsetting, and it goes like this:
 
 1. A service deploys.
-2. Health check returns 200 — the HTTP server is up.
+2. Health check returns 200, because the HTTP server is up.
 3. A few hours later, a user does the one operation that needs `S3_BUCKET` to be set.
 4. `os.Getenv("S3_BUCKET")` returns `""`.
 5. The service hands back an opaque 500.
@@ -39,13 +39,11 @@ if err := envalid.LoadInto(&cfg); err != nil {
 
 The contract I want from `LoadInto`:
 
-1. **Required fields fail fast.** If `DB_URL` isn't set, the process should refuse to start. Not "log a warning", not "return zero value". Exit.
+1. **Required fields fail fast.** If `DB_URL` isn't set, the process should exit rather than log a warning or return a zero value.
 2. **Defaults are explicit.** If a field has `default:"8080"`, the zero value coming out of the env should be `8080`, not `0`.
 3. **Type coercion is built in.** `os.Getenv` returns a string. I want my `int` to be an int, my `bool` to be a bool, my `time.Duration` to be a duration.
-4. **Errors enumerate, not first-fail.** If three variables are missing, tell me all three. Don't make me restart and find out about the second one only after I fix the first.
-5. **The list of variables is discoverable.** Some component — usually a healthcheck or `--help` — should be able to enumerate every variable the service expects.
-
-That's the bar. Let's build it.
+4. **Errors enumerate.** If three variables are missing, tell me all three. Don't make me restart and find out about the second one only after I fix the first.
+5. **The list of variables is discoverable.** Some component (usually a healthcheck or `--help`) should be able to enumerate every variable the service expects.
 
 ## A first cut
 
@@ -168,7 +166,7 @@ $ ./my-service
 exit status 1
 ```
 
-That message takes the operator from "the service exited" to "I know exactly which env block in the deploy config is broken" in one step.
+That message tells the operator exactly which env block in the deploy config is broken.
 
 ## Decision: struct tag vs. registry
 
@@ -188,7 +186,7 @@ envalid.Optional("HTTP_PORT", "8080")
 I've shipped both at different points. Conclusions:
 
 - The **struct shape** is much nicer for application code. You get autocomplete, type safety, and a place where every env var is documented.
-- The **registry shape** is useful when "the set of env vars" needs to be available outside of a single struct — for example, a healthcheck endpoint that lists every var the service consumes. You can derive a registry from the struct via reflection, but the inverse is messier.
+- The **registry shape** is useful when "the set of env vars" needs to be available outside of a single struct, for example a healthcheck endpoint that lists every var the service consumes. You can derive a registry from the struct via reflection, but the inverse is messier.
 
 So: ship both, but optimize the struct path for ergonomics, and let the registry derive from it.
 
@@ -204,7 +202,7 @@ The healthcheck calls `KeysOf(cfg)` and ranges over the result. New variables in
 The `default:"8080"` tag is the simplest thing that works. But there are gotchas:
 
 - **Struct field zero values vs. tag-specified defaults.** If a user writes `cfg.HTTPPort = 8443` *before* calling `LoadInto`, what should happen? My take: the env var (or its default) wins. The reflection-based loader has no idea what the field's pre-call value was, and trying to detect "explicit override" is a rabbit hole.
-- **Empty string is a valid value.** `default:""` should *not* be the same as "no default". The library distinguishes via `field.Tag.Lookup("default")` (returns a second `ok` bool), not `Get("default") == ""`. Subtle but important.
+- **Empty string is a valid value.** `default:""` should *not* be the same as "no default". The library distinguishes via `field.Tag.Lookup("default")` (returns a second `ok` bool), not `Get("default") == ""`.
 - **Multiline defaults are evil.** I don't support them. If you have a PEM key in a default, you're doing something wrong. The default should be the simple thing, and the prod value the complex thing.
 
 ## The healthcheck wiring
@@ -232,7 +230,7 @@ http.HandleFunc("/healthz/env", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-In practice the service would never have started if anything were missing — `MustLoadInto` would have killed it. But this endpoint is useful for *post-hoc* drift detection, where someone rotated a secret without restarting the service. (Don't laugh. It happens.)
+In practice the service would never have started if anything were missing, because `MustLoadInto` would have killed it. But this endpoint is useful for *post-hoc* drift detection, where someone rotated a secret without restarting the service. (Don't laugh. It happens.)
 
 ## What I do *not* try to do
 
@@ -248,19 +246,19 @@ A handful that I keep relearning:
 
 1. **Fail at startup. Loudly.** A service that comes up with bad config is a service waiting to embarrass you.
 2. **Collect every error before reporting.** Don't make the operator restart five times to find five bugs.
-3. **Make defaults explicit, not implicit.** "Zero value of `int` is `0`" is not a sane default for `HTTP_PORT`.
-4. **Distinguish "not set" from "set to empty string".** They are different.
-5. **Expose the list.** A healthcheck or `--help` flag that enumerates expected variables is worth its weight in gold.
+3. **Make defaults explicit.** "Zero value of `int` is `0`" is not a sane default for `HTTP_PORT`.
+4. **Distinguish "not set" from "set to empty string".**
+5. **Expose the list.** A healthcheck or `--help` flag that enumerates expected variables is worth having.
 
-The whole pattern is small. The bugs it prevents are big. Worth the 150 lines.
+The whole pattern is small, and it's worth the 150 lines.
 
 Happy starting up!
 
 ## References
 
-- `os.LookupEnv` — [`pkg.go.dev/os#LookupEnv`](https://pkg.go.dev/os#LookupEnv)
-- `reflect` package and `StructTag` — [`pkg.go.dev/reflect`](https://pkg.go.dev/reflect), [`pkg.go.dev/reflect#StructTag`](https://pkg.go.dev/reflect#StructTag)
-- `strconv` for type coercion — [`pkg.go.dev/strconv`](https://pkg.go.dev/strconv)
-- `time.ParseDuration` — [`pkg.go.dev/time#ParseDuration`](https://pkg.go.dev/time#ParseDuration)
-- `errors.Join` — [`pkg.go.dev/errors#Join`](https://pkg.go.dev/errors#Join)
-- `os.Exit` — [`pkg.go.dev/os#Exit`](https://pkg.go.dev/os#Exit)
+- `os.LookupEnv`: [`pkg.go.dev/os#LookupEnv`](https://pkg.go.dev/os#LookupEnv)
+- `reflect` package and `StructTag`: [`pkg.go.dev/reflect`](https://pkg.go.dev/reflect), [`pkg.go.dev/reflect#StructTag`](https://pkg.go.dev/reflect#StructTag)
+- `strconv` for type coercion: [`pkg.go.dev/strconv`](https://pkg.go.dev/strconv)
+- `time.ParseDuration`: [`pkg.go.dev/time#ParseDuration`](https://pkg.go.dev/time#ParseDuration)
+- `errors.Join`: [`pkg.go.dev/errors#Join`](https://pkg.go.dev/errors#Join)
+- `os.Exit`: [`pkg.go.dev/os#Exit`](https://pkg.go.dev/os#Exit)

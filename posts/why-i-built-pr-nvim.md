@@ -25,11 +25,11 @@ I wanted the whole thing to live in the editor. So I started a plugin.
 
 ## What I actually wanted
 
-Before I wrote a single line of plugin code, I made myself write down what I was solving for:
+Before I wrote any plugin code, I wrote down what I was solving for:
 
-1. **Inline review threads, in the buffer.** I want to open a file that has unresolved review comments and *see them as virtual text or signs* on the relevant lines. Same UX as LSP diagnostics — because that's what they are, conceptually.
-2. **A floating window to read and reply to threads.** Not a popup that disappears the moment you move the cursor. A real, focusable, scrollable window I can navigate with normal Vim motions.
-3. **Drafts that survive.** If I open a thread, type half a reply, accidentally close it — the draft is still there next time.
+1. **Inline review threads, in the buffer.** I want to open a file that has unresolved review comments and *see them as virtual text or signs* on the relevant lines. Same UX as LSP diagnostics, because that's what they are, conceptually.
+2. **A floating window to read and reply to threads.** A real, focusable, scrollable window I can navigate with normal Vim motions, and one that doesn't disappear the moment you move the cursor.
+3. **Drafts that survive.** If I open a thread, type half a reply and accidentally close it, the draft is still there next time.
 4. **One picker to find PRs.** I shouldn't have to leave the editor to switch to a different PR.
 5. **Provider-agnostic.** I work in GitHub mostly, but not exclusively. I don't want this rewritten if I ever land on a GitLab project.
 
@@ -37,13 +37,13 @@ That last one turned out to drive most of the architecture.
 
 ## The "shell out to a CLI" decision
 
-The most consequential decision was made very early: **do not call provider APIs directly from Lua.**
+I decided this very early: **do not call provider APIs directly from Lua.**
 
 Reasons:
 
-- I would have to reimplement auth flows for every provider — GitHub PATs, GitHub Apps, GitLab tokens, Bitbucket app passwords.
+- I would have to reimplement auth flows for every provider: GitHub PATs, GitHub Apps, GitLab tokens, Bitbucket app passwords.
 - I would have to track and update every provider's REST/GraphQL schema.
-- I would have to handle rate limits, retries, pagination — all the messy bits.
+- I would have to handle rate limits, retries and pagination.
 - And then I'd have a Neovim plugin that does HTTP. There's already a tool that does HTTP per provider, and *I already have it installed*: [`gh`](https://cli.github.com/), [`glab`](https://gitlab.com/gitlab-org/cli), `curl`.
 
 So the plugin shells out. Provider abstraction becomes a tiny strategy interface:
@@ -78,18 +78,16 @@ submit_review(pr_id, event, cb)
 
 The implementation of each is "build the right CLI arg list, run it async via plenary, parse the JSON output". That's it.
 
-This buys me a few things I didn't fully appreciate at first:
+This buys me a few things I didn't think about at first:
 
 - **Auth is solved.** Whatever the user did to set up `gh auth login`, that's what the plugin uses.
 - **Rate limits are solved.** The CLI handles them.
 - **I can debug by running the same CLI command myself.** The plugin output is literally a JSON dump of `gh api ...`. I can copy the command from the plugin's log and run it in a terminal.
-- **Adding a provider is a few hundred lines, not a few thousand.** GitLab and Bitbucket landed within weeks of GitHub working end-to-end.
+- **Adding a provider is a few hundred lines.** GitLab and Bitbucket landed within weeks of GitHub working end-to-end.
 
 ## Inline threads as `vim.diagnostic`
 
-This was the second decision that paid off out of all proportion.
-
-Review comments are conceptually just diagnostics. They have a location (file + line), a severity, and a message. Neovim already has a beautifully designed API for displaying those: [`vim.diagnostic`](https://neovim.io/doc/user/diagnostic.html).
+Review comments are conceptually just diagnostics. They have a location (file + line), a severity, and a message. Neovim already has an API for displaying those: [`vim.diagnostic`](https://neovim.io/doc/user/diagnostic.html).
 
 So pr.nvim publishes review threads as diagnostics in a dedicated namespace:
 
@@ -107,26 +105,26 @@ vim.diagnostic.set(ns, bufnr, {
 })
 ```
 
-The instant payoff:
+What that gives me:
 
-- Threads show inline with whatever the user has already configured for diagnostics — virtual text, signs, virtual lines, underlines, whatever.
+- Threads show inline with whatever the user has already configured for diagnostics: virtual text, signs, virtual lines, underlines, whatever.
 - `]d` / `[d` jumps between threads, because to Neovim they *are* diagnostics.
 - `:PRQuickfix` is literally just `vim.diagnostic.setqflist({ namespace = ns })`.
 - Themes and colorschemes already handle the styling.
 
-I get most of an inline review UX for free by being a good citizen on top of `vim.diagnostic`.
+I get most of an inline review UX for free by building on top of `vim.diagnostic`.
 
-## Outdated and resolved threads — what to show by default?
+## Outdated and resolved threads: what to show by default?
 
 This one was tricky.
 
 A review thread can be:
 
-- **active** — the line still exists at this position in the current commit.
-- **outdated** — the line numbers no longer match the current commit's view of the file.
-- **resolved** — the review participants explicitly marked the conversation as done.
+- **active**: the line still exists at this position in the current commit.
+- **outdated**: the line numbers no longer match the current commit's view of the file.
+- **resolved**: the review participants explicitly marked the conversation as done.
 
-Showing all three by default makes the buffer noisy. Showing only active hides important context — sometimes you *want* to see what was said on a line that has since been refactored.
+Showing all three by default makes the buffer noisy. Showing only active hides important context, and sometimes you *want* to see what was said on a line that has since been refactored.
 
 The compromise I landed on:
 
@@ -148,17 +146,17 @@ Both toggles are reachable from the picker via `<C-f>` to cycle filters in place
 
 ## The popup is its own headache
 
-The other piece is the floating window — the one that opens when you hit `<CR>` on a thread.
+The other piece is the floating window, the one that opens when you hit `<CR>` on a thread.
 
 I tried implementing it from scratch with `nvim_open_win`. Bad time. There's the popup itself, but then there's a header, a body, a reply input, scrolling, focus management between header and body, key dispatch, layout on resize, layout on small screens, layout on multiple monitors...
 
-The thing that saved me was [`nui.nvim`](https://github.com/MunifTanjim/nui.nvim). It's a UI-primitives library — popups, layouts, menus — and it does the chore work I really did not want to do. After switching to it, the popup code roughly halved and the bug count fell off a cliff. Async subprocess handling is via [`plenary.nvim`](https://github.com/nvim-lua/plenary.nvim).
+The thing that saved me was [`nui.nvim`](https://github.com/MunifTanjim/nui.nvim). It's a UI-primitives library (popups, layouts, menus) and it does the chore work I really did not want to do. After switching to it, the popup code roughly halved and the bug count fell off a cliff. Async subprocess handling is via [`plenary.nvim`](https://github.com/nvim-lua/plenary.nvim).
 
 ## Picker as control surface
 
 The other thing that has scaled well: pickers ([snacks.nvim](https://github.com/folke/snacks.nvim) / [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) / [fzf-lua](https://github.com/ibhagwan/fzf-lua)) as the central control surface.
 
-Rather than have a custom UI for "list PRs", "list threads", "switch filters" — every list-shaped thing is a picker entry. Users pick the picker they already use. The plugin defines actions on entries; the picker handles fuzzy matching, preview, multi-select, the works.
+Rather than have a custom UI for "list PRs", "list threads" and "switch filters", every list-shaped thing is a picker entry. Users pick the picker they already use. The plugin defines actions on entries; the picker handles fuzzy matching, preview, multi-select, the works.
 
 ```
 :PR
@@ -181,9 +179,9 @@ Today, pr.nvim:
 - Has a popup for reading threads and posting replies.
 - Has a checkout action so I can land on a PR's branch without leaving the editor.
 
-There's a *lot* more I want to do — drafts that survive across sessions, full review submission with pending comments, suggestion blocks rendered as applyable diffs, status counters, CI checks. Some of that is already in progress. The next post will cover those pieces once they've shipped.
+There's a *lot* more I want to do: drafts that survive across sessions, full review submission with pending comments, suggestion blocks rendered as applyable diffs, status counters, CI checks. Some of that is already in progress. The next post will cover those pieces once they've shipped.
 
-For now, the headline is: I haven't switched tabs to read a review comment in six weeks. That alone has been worth the build.
+For now, I haven't switched tabs to read a review comment in six weeks.
 
 Happy reviewing!
 
@@ -191,8 +189,8 @@ Happy reviewing!
 
 **Plugin runtime**
 
-- [nui.nvim](https://github.com/MunifTanjim/nui.nvim) — UI primitives
-- [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) — async helpers
+- [nui.nvim](https://github.com/MunifTanjim/nui.nvim) (UI primitives)
+- [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) (async helpers)
 
 **Provider CLIs**
 
@@ -207,5 +205,5 @@ Happy reviewing!
 
 **Neovim APIs**
 
-- [`vim.diagnostic`](https://neovim.io/doc/user/diagnostic.html) — diagnostic publishing/jumping
+- [`vim.diagnostic`](https://neovim.io/doc/user/diagnostic.html) (diagnostic publishing/jumping)
 - [Lua API (`nvim_create_namespace` etc.)](https://neovim.io/doc/user/api.html)

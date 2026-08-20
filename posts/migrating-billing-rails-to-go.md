@@ -6,13 +6,11 @@ permalink: /migrating-billing-rails-to-go
 
 # Migrating a billing system from Rails to Go — process, phases, and what nearly broke us
 
-If you are about to migrate a billing system from Rails to Go, please sit down. Get water. Open a notebook. Read this twice before you write the first line of code.
+I keep meeting engineers in the middle of a Rails-to-Go billing migration, and they all say the same thing: they thought it was a rewrite of a CRUD app, and it isn't.
 
-I am writing this because I keep meeting engineers in the middle of one of these migrations, and they all have the same look. The look says: *I thought this was a rewrite of a CRUD app. It is not a rewrite of a CRUD app.*
+A billing migration is its own kind of project. The code is the easy part. The hard part is preserving correctness across a moving target (invoices in flight, subscriptions mid-renewal, refunds half-processed, webhooks queued for retry) while two systems run side by side for weeks or months. This post is the field guide I wish someone had handed me.
 
-A billing migration is its own kind of project. The code is the easy part. What's hard is preserving correctness across a moving target — invoices in flight, subscriptions mid-renewal, refunds half-processed, webhooks queued for retry — while two systems run side by side for weeks or months. This post is the field guide I wish someone had handed me.
-
-It's deliberately generic. Patterns, not specifics. Any resemblance to a system I or you might have worked on is incidental, and the techniques apply regardless of stack flavor.
+It's deliberately generic. Any resemblance to a system I or you might have worked on is incidental, and the techniques apply regardless of stack flavor.
 
 ## Why migrate at all?
 
@@ -27,7 +25,7 @@ If you can't write the *why* on one whiteboard line, you probably should not do 
 
 ## The phase map
 
-Every migration I've worked on or watched has roughly the same five phases. The phase you're tempted to skip is, invariably, the one that bites you.
+Every migration I've worked on or watched has roughly the same five phases. The phase you're tempted to skip is the one that bites you.
 
 ```
 Phase 0: Understand
@@ -39,11 +37,11 @@ Phase 4: Decommission
 
 The naming is mine. The order is not negotiable.
 
-### Phase 0 — Understand the existing system
+### Phase 0: Understand the existing system
 
 You do not rewrite a system you do not understand. You especially do not rewrite a *billing* system you do not understand, because billing is where every weird historical decision your company ever made comes home to live.
 
-The deliverable from Phase 0 is a single document — call it the *domain audit* — that answers:
+The deliverable from Phase 0 is a single document (call it the *domain audit*) that answers:
 
 - What are the entities? (customer, subscription, plan, invoice, line item, payment, refund, credit note...)
 - What are the state machines on each one? (`subscription: trialing → active → past_due → cancelled → ...`)
@@ -56,7 +54,7 @@ That last one is the killer in a Rails-to-Go migration. Rails callbacks are the 
 
 Spend a week on this. Maybe two. The cost of skipping it is shipping a bug that issues a refund twice.
 
-### Phase 1 — Carve a boundary
+### Phase 1: Carve a boundary
 
 You do not rewrite the whole billing system in one shot. You rewrite *one capability* at a time.
 
@@ -77,7 +75,7 @@ Why start here? Because it forces you to build, on day one:
 
 If those four things don't exist by the end of Phase 1, you don't have infrastructure to do the harder work.
 
-### Phase 2 — Shadow
+### Phase 2: Shadow
 
 Before you cut a single user over, the Go service runs *silently in parallel* with Rails for at least a few weeks.
 
@@ -96,17 +94,17 @@ The shape: every request that hits Rails is also dispatched to Go, with a differ
     +  "total_cents": 11999
 ```
 
-The diff is everything. Every divergence is either a bug in the Go service, or — terrifyingly often — a bug in the Rails service that nobody knew about because the output was never compared against an independent implementation. (You will find both. Budget for it.)
+Every divergence is either a bug in the Go service, or (terrifyingly often) a bug in the Rails service that nobody knew about because the output was never compared against an independent implementation. (You will find both. Budget for it.)
 
-Critical: **canonicalize before comparing.** JSON field order, floating-point formatting, decimal trailing zeros, timestamp timezones — all of these need to be normalized before a diff. Otherwise every response looks different and you'll dismiss real bugs as noise.
+**Canonicalize before comparing.** JSON field order, floating-point formatting, decimal trailing zeros and timestamp timezones all need to be normalized before a diff. Otherwise every response looks different and you'll dismiss real bugs as noise.
 
 You hold here, in shadow mode, until the diff is clean for *every* request shape for at least a week. Then you can think about cutting traffic over.
 
-### Phase 3 — Cut over, one slice at a time
+### Phase 3: Cut over, one slice at a time
 
 The cutover is the moment you start serving real production responses from the Go service.
 
-The technique I keep reaching for: a **feature flag, scoped by customer**. Not "10% of requests to Go" — that's noisy and undebuggable. Instead: "this list of explicitly-enabled customers go to Go; everyone else goes to Rails." Start the list with one customer — yourself. Then a handful of internal accounts. Then opt-in beta customers. Then a percentage, by customer hash, growing weekly.
+The technique I keep reaching for: a **feature flag, scoped by customer**. Not "10% of requests to Go", which is noisy and undebuggable. Instead: "this list of explicitly-enabled customers go to Go; everyone else goes to Rails." Start the list with one customer, yourself. Then a handful of internal accounts. Then opt-in beta customers. Then a percentage, by customer hash, growing weekly.
 
 Why per-customer and not per-request? Because a single customer must see *consistent* behavior across requests. If their invoice list comes from Go but their invoice detail comes from Rails, and the two have drifted by a cent, the customer sees an arithmetic error.
 
@@ -121,7 +119,7 @@ return railsBilling.Handle(req)
 
 That layer is the cheapest insurance you'll buy. When something goes wrong on Go, you flip the flag for the affected customer and they're back on Rails before you've finished your second sip of coffee.
 
-### Phase 4 — Decommission
+### Phase 4: Decommission
 
 Eventually, every customer is on Go. The Rails code path is dead. Now you have to *prove it's dead* before you delete it.
 
@@ -134,13 +132,13 @@ Tactics:
 
 Treat this phase as a project with its own scope. "We finished cutover, we're done" is how you end up paying for two systems for a year.
 
-## Data decoupling — the hard part
+## Data decoupling: the hard part
 
 The single hardest question in a Rails-to-Go billing migration: *who owns the data?*
 
 The naive answer is "share the database". It works on day one and becomes a tar pit by month three. Two services writing to the same tables, with subtly different assumptions about callbacks, validations, and indexes, will diverge. The clean answer is "split the database eventually". Both answers are right; the migration is the messy middle.
 
-The four strategies I keep using, roughly in order of how I introduce them:
+The strategies I keep using, roughly in order of how I introduce them:
 
 ### Strategy 1: Shared database, read-only Go
 
@@ -156,7 +154,7 @@ This phase will last longer than you expect.
 
 ### Strategy 2: Dual write through an anti-corruption layer
 
-When Go starts writing, you don't let it write directly to the shared Rails schema. You introduce an **[anti-corruption layer](https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer)** (ACL) on the Rails side — a small, explicit Ruby module whose only job is to accept calls from Go and translate them into the Rails idioms. (The pattern itself was coined by Eric Evans in *Domain-Driven Design* and is often paired with [Martin Fowler's Strangler Fig](https://martinfowler.com/bliki/StranglerFigApplication.html) approach.)
+When Go starts writing, you don't let it write directly to the shared Rails schema. You introduce an **[anti-corruption layer](https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer)** (ACL) on the Rails side: a small, explicit Ruby module whose only job is to accept calls from Go and translate them into the Rails idioms. (The pattern itself was coined by Eric Evans in *Domain-Driven Design* and is often paired with [Martin Fowler's Strangler Fig](https://martinfowler.com/bliki/StranglerFigApplication.html) approach.)
 
 ```ruby
 module Acl
@@ -210,7 +208,7 @@ Each side writes to its own database in a single local transaction, and writes a
         └─────────┘         └─────────┘
 ```
 
-The benefit is that neither side reads the other's transactional state directly. Each side has its own consistent local view, refreshed from events. The cost is **eventual consistency** — there's a window, usually a few seconds, where the two sides disagree.
+The benefit is that neither side reads the other's transactional state directly. Each side has its own consistent local view, refreshed from events. The cost is **eventual consistency**: there's a window, usually a few seconds, where the two sides disagree.
 
 For billing, the question becomes: *which fields are okay to be eventually consistent, and which are not?*
 
@@ -236,18 +234,18 @@ Each entity moves through these stages independently. You will be in the middle 
 
 ## Money is not a number
 
-A specific section because this is the single most expensive mistake I've seen.
+This is the single most expensive mistake I've seen.
 
-In Ruby, money commonly lives as a `BigDecimal`. In Go, the temptation is to use `float64`. Don't. Ever.
+In Ruby, money commonly lives as a `BigDecimal`. In Go, the temptation is to use `float64`. Don't.
 
 The patterns that have worked:
 
 - **Store money as integers** (`amount_cents int64`, `currency string`). Never store money as floats. Never store money without a currency. The integer is the source of truth.
 - **Wrap it in a type that hides the integer.** `money.Amount` with no float constructor. Arithmetic operations only between same-currency amounts. Multiplication only by a unitless scalar. Division returns a quotient *and* a remainder, so you can't lose a cent.
-- **Round explicitly, with a stated rule.** Banker's rounding vs. round-half-up vs. truncate — these will give different answers, and they will give different answers from the Rails side if you weren't paying attention to which one ActiveRecord was doing.
-- **Forbid implicit conversions to display.** Formatting money for a UI is an explicit call — `m.Format(locale)` — not a `String()` method that hides the locale assumption.
+- **Round explicitly, with a stated rule.** Banker's rounding vs. round-half-up vs. truncate: these will give different answers, and they will give different answers from the Rails side if you weren't paying attention to which one ActiveRecord was doing.
+- **Forbid implicit conversions to display.** Formatting money for a UI is an explicit call, `m.Format(locale)`, not a `String()` method that hides the locale assumption.
 
-The first time you bring up the Go service and the integration tests pass, run a reconciliation report against Rails over a month of real data. If even one cent disagrees, find it before you go further. A cent is the smoke; the fire is somewhere in your rounding rules.
+The first time you bring up the Go service and the integration tests pass, run a reconciliation report against Rails over a month of real data. If even one cent disagrees, find it before you go further.
 
 ## Deployment hurdles
 
@@ -266,7 +264,7 @@ This is true for any rolling deployment, but it's *especially* true when "both s
 
 ### Background jobs are their own migration
 
-[Sidekiq](https://github.com/sidekiq/sidekiq) jobs don't magically become Go workers. A typical Rails billing system has dozens of jobs — renewal, dunning, reconciliation, currency conversion, webhook retries, report generation. Each one needs a Go equivalent, and the transition has the same shadow / cutover / decommission shape as the HTTP API.
+[Sidekiq](https://github.com/sidekiq/sidekiq) jobs don't magically become Go workers. A typical Rails billing system has dozens of jobs: renewal, dunning, reconciliation, currency conversion, webhook retries, report generation. Each one needs a Go equivalent, and the transition has the same shadow / cutover / decommission shape as the HTTP API.
 
 A trap: jobs that *enqueue other jobs*. If your Go renewal worker enqueues a Sidekiq dunning job by name, you've coupled the two systems' queues. Untangling that mid-migration is painful. Decide early: do you bridge the queues (Go enqueues via Sidekiq's Redis protocol), or do you migrate both producer and consumer together?
 
@@ -274,7 +272,7 @@ A trap: jobs that *enqueue other jobs*. If your Go renewal worker enqueues a Sid
 
 Anything that runs on a schedule needs a careful handover. You do not want both the Rails renewal cron and the Go renewal cron running on the same day. Pick one. Cut over with a flag. Confirm the old one is disabled before you let the new one run.
 
-Distributed locks help — a row in a `cron_locks` table with `(job_name, run_date)` as the primary key, both services acquire-or-skip — but the real solution is "exactly one writer per scheduled job during transition".
+Distributed locks help (a row in a `cron_locks` table with `(job_name, run_date)` as the primary key, both services acquire-or-skip), but the real solution is "exactly one writer per scheduled job during transition".
 
 ### Connection pool sizing
 
@@ -287,7 +285,7 @@ Calculate the database's max connections, divide by the number of Go pods, divid
 Webhooks deserve special attention because they are *the* place where a billing migration leaks correctness if you're not careful.
 
 - **Inbound webhooks** (from your payment provider): exactly one consumer. During the migration, point them at a small router that decides whether to forward to Rails or Go *per event type* (or per customer, depending on your cutover dimension). Never let both services try to process the same webhook.
-- **Outbound webhooks** (to your customers): exactly one publisher. While both services exist, *only one* should send the `invoice.paid` webhook for a given invoice. The other side, if it's tracking the same event, suppresses the webhook send. Use the outbox to centralize this — only the system that wrote the row publishes its event.
+- **Outbound webhooks** (to your customers): exactly one publisher. While both services exist, *only one* should send the `invoice.paid` webhook for a given invoice. The other side, if it's tracking the same event, suppresses the webhook send. Use the outbox to centralize this: only the system that wrote the row publishes its event.
 
 A duplicated outbound webhook means your customer's system receives a "paid" notification twice. They might charge their downstream customer twice. You will get the email.
 
@@ -299,11 +297,11 @@ The thing that lets you sleep at night during the cutover is a rollback that tak
 - **Both databases stay in sync via the outbox.** A customer flipped back to Rails finds their data is current.
 - **Schema changes are reversible.** If you added a column that Go writes, Rails ignores the unfamiliar column on read. If you tighten a constraint, deploy it only after both sides are guaranteed to satisfy it.
 
-The point isn't that you'll need to roll back often. The point is that you can. Without that, every cutover is a heart-attack moment.
+You probably won't need to roll back often, but you need to be able to. Without that, every cutover is a heart-attack moment.
 
 ### Observability parity
 
-Whatever you have on Rails — request logs, error tracking, metrics, tracing — you must have on Go at parity *before* the first real customer moves. The migration's first weeks will produce surprises, and the only way to debug a surprise on Go without panicking is to have the same instrumentation you'd have on Rails.
+Whatever you have on Rails (request logs, error tracking, metrics, tracing) you must have on Go at parity *before* the first real customer moves. The migration's first weeks will produce surprises, and the only way to debug a surprise on Go without panicking is to have the same instrumentation you'd have on Rails.
 
 Specific things to wire up day one:
 
@@ -340,7 +338,7 @@ A handful that are easy to write down and surprisingly hard to internalize:
 9. **Build observability parity before the first cutover.** Not after.
 10. **Have a rollback that takes seconds.** Or you will be the person paged when it doesn't.
 
-I have left out a lot — currency conversion, tax engines, accounting exports, regulatory holds, the joy of trying to explain dunning to a non-billing engineer. Maybe future posts. For now: if you're about to start one of these, take the phase map, take Phase 0 seriously, and remember that the migration is the project.
+I have left out a lot: currency conversion, tax engines, accounting exports, regulatory holds, the joy of trying to explain dunning to a non-billing engineer. Maybe future posts. For now: if you're about to start one of these, take the phase map, take Phase 0 seriously, and remember that the migration is the project.
 
 Good luck. And mind your cents.
 
@@ -361,7 +359,7 @@ Good luck. And mind your cents.
 
 **Go**
 
-- [`database/sql`](https://pkg.go.dev/database/sql) — including [`SetMaxOpenConns`](https://pkg.go.dev/database/sql#DB.SetMaxOpenConns)
+- [`database/sql`](https://pkg.go.dev/database/sql), including [`SetMaxOpenConns`](https://pkg.go.dev/database/sql#DB.SetMaxOpenConns)
 
 **Related posts**
 

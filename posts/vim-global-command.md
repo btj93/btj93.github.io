@@ -6,7 +6,7 @@ permalink: /vim-g-command
 
 # Mastering the global Command in Vim
 
-The `global` command in Vim is a powerful tool for executing commands on all lines that match a specific pattern.
+The `global` command in Vim runs a command on every line that matches a pattern.
 
 The `global` command has the following syntax:
 
@@ -14,7 +14,7 @@ The `global` command has the following syntax:
 :g/pattern/command
 ```
 
-This command allows you to perform various actions, including substitutions, deletions, and more, making it an *essential* feature for any Vim user. In this article, we will explore the syntax of the `global` command, its various options, and how to chain it with the `substitute` command for efficient text editing.
+You can use it for substitutions, deletions, and other actions.
 
 ## Basic Syntax
 
@@ -40,13 +40,13 @@ This command will remove all lines that match the pattern "error" from the curre
 
 ## Viewing Grep Results
 
-After running a `global` command, you can see the results directly in the buffer. If you want to perform actions on the matching lines, you can use the command in conjunction with other Vim commands.
+After running a `global` command, you can see the results directly in the buffer. You can also combine it with other Vim commands to act on the matching lines.
 
 ## Chaining Commands with Global and Substitute
 
 It is not a coincidence that the [last post](https://btj93.github.io/nvim-substitute-command) is about another command in vim.
 
-One of the powerful features of Vim is the ability to chain commands together. You can use the `global` command in combination with the `substitute` command to quickly find and replace text across all matching lines.
+Vim lets you chain commands together. You can use the `global` command with the `substitute` command to find and replace text across all matching lines.
 
 ### Grep and substitute synergy
 
@@ -118,7 +118,7 @@ Another solution is to use this command:
   - `G` moves the cursor to the end of the file.
   - `p` pastes the deleted line below the current line.
 
-In this solution, we can observe that the `norm` allows us to execute a normal mode keymap, which allows us to use normal mode keymaps to process the line.
+In this solution, `norm` lets us execute a normal mode keymap, so we can use normal mode keymaps to process the line.
 
 ## Advanced global Options
 
@@ -135,6 +135,6 @@ You can use these options to customize how the `global` command behaves. For exa
 
 ## Conclusion
 
-Mastering the `global` command in Vim is *essential* for efficient text manipulation. By understanding its syntax and options, you can quickly perform actions on all lines that match a specific pattern. Additionally, chaining the `global` command with the `substitute` command allows for powerful text editing capabilities. Practice using these commands to enhance your productivity in Vim.
+The `global` command runs an action on every line that matches a pattern. Chaining it with the `substitute` command lets you find and replace across those lines.
 
 Happy editing!

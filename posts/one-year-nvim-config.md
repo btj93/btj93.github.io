@@ -8,7 +8,7 @@ permalink: /one-year-nvim-config
 
 It's been roughly a year since I migrated to Neovim. The `.config/nvim` folder has gone through plugin sprees, deletion sprees, refactoring sprees, and the occasional "I'm sure this colorscheme is the one" phase.
 
-I figured a quieter month was a good excuse to look back and write down the patterns that have *survived*. Not the plugins themselves — those still rotate. The patterns. The conventions. The little structural decisions that keep the config from collapsing into a 2,000-line `init.lua`.
+I figured a quieter month was a good excuse to look back and write down the patterns that have *survived*. Not the plugins themselves, those still rotate. I mean the conventions and the little structural decisions that keep the config from collapsing into a 2,000-line `init.lua`.
 
 ## Pattern 1: one file per plugin
 
@@ -91,25 +91,23 @@ What stuck instead: nearly everything I do interactively goes through `<leader>`
 
 When I forget what the second key is, [which-key.nvim](https://github.com/folke/which-key.nvim) shows me a menu.
 
-> Plugins mentioned in this post: [harpoon](https://github.com/ThePrimeagen/harpoon), [mini.files](https://github.com/echasnovski/mini.files). That's it. That's the system.
+> Plugins mentioned in this post: [harpoon](https://github.com/ThePrimeagen/harpoon), [mini.files](https://github.com/echasnovski/mini.files).
 
-It's also a lot kinder to people who pair on my machine — they can read the popup and intuit the structure instead of memorizing what `<C-S-M-F4>` means.
+It's also a lot kinder to people who pair on my machine. They can read the popup and intuit the structure instead of memorizing what `<C-S-M-F4>` means.
 
-## Pattern 4: don't fight LazyVim — extend it
+## Pattern 4: don't fight LazyVim, extend it
 
 I started with [LazyVim](https://www.lazyvim.org/) as a distro. Then I went through the "I want to build it all myself" phase. Then I came back.
 
-The realization: LazyVim isn't an opinionated wall, it's a baseline. Every plugin it ships can be:
+LazyVim is a baseline, and every plugin it ships can be:
 
 - **Replaced** by returning the same spec name with `enabled = false`.
 - **Tweaked** by returning the same spec name with my own `opts`.
 - **Extended** by adding more `keys` or dependencies.
 
-So the "do it all myself" phase mostly cost me time. The thing I actually want is "LazyVim's defaults, but with my opinions layered on top." That's exactly what the distro is designed for.
+So the "do it all myself" phase mostly cost me time. The thing I actually want is "LazyVim's defaults, but with my opinions layered on top." That's what the distro is designed for.
 
-Trust the path. Then deviate where you genuinely care.
-
-## Pattern 5: capture experiments in `lua/user/` (or wherever) — not in `init.lua`
+## Pattern 5: capture experiments in `lua/user/` (or wherever), not in `init.lua`
 
 When I want to try a new keymap, plugin idea, or Lua snippet, the temptation is to wedge it directly into `init.lua` "just to see". Three weeks later there are eight half-formed experiments competing for attention there.
 
@@ -148,28 +146,28 @@ A `:Lazy restore` after `git clone` puts the world back together exactly as it w
 
 ## Pattern 7: when in doubt, write it small and inline
 
-I went through a phase of trying to extract every helper into modules. Beautiful from a Java perspective. Painful from a Vim perspective.
+I went through a phase of trying to extract every helper into modules. Nice from a Java perspective, painful from a Vim one.
 
-The thing about Lua-in-Neovim is that the API surface is the config. You're not writing a library; you're writing instructions for an editor. A five-line autocmd inline is more discoverable than a `require("user.utils").attach_autocmd(...)` with the same body hidden one file away.
+The thing about Lua-in-Neovim is that the API surface is the config. You're writing instructions for an editor rather than a library. A five-line autocmd inline is more discoverable than a `require("user.utils").attach_autocmd(...)` with the same body hidden one file away.
 
 Now my rule is: extract when the same logic shows up in three places. Not before.
 
 ## What I'm still figuring out
 
-The next thing I want to crack is: a clean way to share keymap definitions between *modes*. I have `gh`/`gl` bound to start/end of line in both normal and visual via `{"n", "v"}`, but more complex maps (like motion repeats, or operator-pending custom motions) don't generalize as cleanly.
+The next thing I want to crack is a clean way to share keymap definitions between *modes*. I have `gh`/`gl` bound to start/end of line in both normal and visual via `{"n", "v"}`, but more complex maps (like motion repeats, or operator-pending custom motions) don't generalize as cleanly.
 
 I don't have an answer yet. Probably a topic for a future post.
 
-For now though — the structure above has survived a year of churn, and I can find anything in my config in under five seconds. That's the only metric I really care about.
+For now though, the structure above has survived a year of churn, and I can find anything in my config in under five seconds. That's the only metric I really care about.
 
 Happy hacking!
 
 ## References
 
-- [LazyVim](https://www.lazyvim.org/) — Neovim distro
-- [lazy.nvim](https://github.com/folke/lazy.nvim) — plugin manager
-- [lazy.nvim lazy loading](https://lazy.folke.io/spec/lazy_loading) — including the `keys` field
-- [lazy.nvim lockfile](https://lazy.folke.io/usage/lockfile) — `lazy-lock.json` semantics
+- [LazyVim](https://www.lazyvim.org/): Neovim distro
+- [lazy.nvim](https://github.com/folke/lazy.nvim): plugin manager
+- [lazy.nvim lazy loading](https://lazy.folke.io/spec/lazy_loading): including the `keys` field
+- [lazy.nvim lockfile](https://lazy.folke.io/usage/lockfile): `lazy-lock.json` semantics
 - [which-key.nvim](https://github.com/folke/which-key.nvim)
 - [harpoon](https://github.com/ThePrimeagen/harpoon)
 - [mini.files](https://github.com/echasnovski/mini.files)
