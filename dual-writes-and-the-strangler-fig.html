@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Dual writes and the strangler fig — how to move a live system without losing data</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2026-08-09">Sun, August 09, 2026</time>
+        <h1 class="mar-b-7">Dual writes and the strangler fig — how to move a live system without losing data</h1>
+    </header>
+    <h1 id="dualwritesandthestranglerfighowtomovealivesystemwithoutlosingdata">Dual writes and the strangler fig — how to move a live system without losing data</h1>
+<p><a href="/migrating-billing-rails-to-go">Last month I wrote about migrating a billing system from Rails to Go</a>. In that post I name-dropped two patterns I leaned on heavily, the <a href="https://martinfowler.com/bliki/StranglerFigApplication.html">strangler fig</a> and dual writes, without actually unpacking either of them.</p>
+<p>A few people asked me what I meant. Fair. So this is the companion post that drills into both.</p>
+<p>They're the two patterns that carry the weight when you're moving a <em>live</em> system (one that's serving real traffic while you're rebuilding it underneath). Get them wrong and you're in for a bad Sunday night.</p>
+<h2 id="thestranglerfignamedproperly">The strangler fig, named properly</h2>
+<p>The pattern's name comes from a <a href="https://martinfowler.com/bliki/StranglerFigApplication.html">2004 essay by Martin Fowler</a>. The metaphor: a strangler fig is a vine that wraps around a host tree, slowly grows down to the soil, and eventually replaces the host while the host is still standing. From the outside, the canopy never disappears. Inside, it's a totally different organism.</p>
+<p>In software, the host is the old system. The vine is the new one. The facade (the stable surface clients keep pointing at) is what makes the substitution invisible.</p>
+<p>The shape of a strangler fig migration:</p>
+<pre><code>Pre:                 Mid:                       Post:
+┌─────┐              ┌──── facade ────┐         ┌──── facade ────┐
+│ old │              │                │         │                │
+└─────┘              ▼                ▼         ▼                ▼
+                ┌─────┐          ┌─────┐    ┌─────┐         ┌─────┐
+                │ old │          │ new │    │ new │         │ new │
+                └─────┘          └─────┘    └─────┘         └─────┘
+                  (still does       (some
+                   most things)      things)
+</code></pre>
+<p>The facade is the part that's worth obsessing over. It is the part that lets you change the implementation per-route, per-user, per-percent. Without a facade, every cutover is a big-bang cutover. That's precisely what the pattern exists to avoid.</p>
+<p>The facade can be a lot of different things: an API gateway, a smart reverse proxy, a feature-flag-aware service router, or a few branches in the application code itself. The exact mechanism matters less than the property: <strong>clients keep talking to one stable thing, while the implementation underneath shifts</strong>.</p>
+<h2 id="whatastranglerfigmigrationlookslikestepbystep">What a strangler fig migration looks like, step by step</h2>
+<ol>
+<li><strong>Insert the facade in front of the old system.</strong> Clients now go through the facade. The facade does nothing but forward to the old system. Verify in production that the facade is invisible: same latency, same responses, no behavioral change.</li>
+<li><strong>Build a new service for one capability.</strong> Pick the smallest, lowest-risk thing. Read-heavy. Well-bounded. (I covered the criteria in the <a href="/migrating-billing-rails-to-go#phase-1--carve-a-boundary">billing post</a>.)</li>
+<li><strong>Run the new service in parallel, silently.</strong> It receives traffic but doesn't serve it yet. See the dual-write section below.</li>
+<li><strong>Cut over one slice at a time.</strong> The facade starts routing that capability to the new service for <em>one customer</em>, then a handful, then a percentage by customer hash, growing weekly.</li>
+<li><strong>Decommission the old code path.</strong> When the facade routes 100% of that capability to the new service, the old code path is dead code. Log entries into it for two weeks to confirm. Then delete it.</li>
+<li><strong>Repeat for the next capability.</strong> Until the old system is empty. Then retire the old system.</li>
+</ol>
+<p>The order is not negotiable. Step 1 happens before step 2. You do not start building the new service until the facade exists and is invisible.</p>
+<h2 id="whatadualwriteisandisnt">What a dual write is (and isn't)</h2>
+<p>When the new service exists but isn't being read from yet, it needs data. Otherwise it has nothing to serve and nothing to verify against.</p>
+<p>That's where dual writes come in. A "dual write" is the umbrella term for <strong>keeping the new system's state in sync with the old system while the old system is still authoritative</strong>.</p>
+<p>The naive picture:</p>
+<pre><code>client → facade ──┬──→ old (authoritative)
+                  └──→ new (shadow)
+</code></pre>
+<p>The facade writes to both. Reads come from old (during shadow phase) or from new (during cutover). Old stays authoritative until you're convinced new is right.</p>
+<p>The naive picture is also the trap.</p>
+<h2 id="thedualwriteatomicityproblem">The dual-write atomicity problem</h2>
+<p>You cannot atomically write to two heterogeneous systems without <a href="https://en.wikipedia.org/wiki/Two-phase_commit_protocol">two-phase commit</a>. And 2PC is, as I argued in the <a href="/saga-and-outbox">outbox/saga post</a>, the wrong tool for almost every real situation.</p>
+<p>Without 2PC, "write to old, then write to new" has four outcomes:</p>
+<table>
+<thead>
+<tr>
+<th>Old</th>
+<th>New</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>✓</td>
+<td>✓</td>
+<td>Fine.</td>
+</tr>
+<tr>
+<td>✗</td>
+<td>(skipped)</td>
+<td>Facade returns error; nothing committed. Fine.</td>
+</tr>
+<tr>
+<td>✓</td>
+<td>✗</td>
+<td><strong>Diverged.</strong> Old has the row, new doesn't.</td>
+</tr>
+<tr>
+<td>✓</td>
+<td>✓-then-✗</td>
+<td>Worse: new has it, then partially rolled back. State is ambiguous.</td>
+</tr>
+</tbody>
+</table>
+<p>The third row is the killer. It's the same shape of problem I described in the <a href="/go-transaction-manager-commit-errors">transaction manager post</a>: a partial commit leaves you not knowing the world's state. Multiplied across thousands of writes a day during a migration, the divergence is silent and accumulates.</p>
+<p>You cannot fix this with retries alone, because the new system might <em>have</em> received the write but failed to acknowledge it (network blip on the response). A retry from the facade then writes the same data twice.</p>
+<p>The fix, structurally, is the same as the outbox fix: <strong>don't synchronously dual-write across system boundaries.</strong> Make one write atomic, to a system you control, and replicate from there asynchronously.</p>
+<h2 id="thefourtopologiesyoullactuallyuse">The four topologies you'll actually use</h2>
+<p>In practice, "dual write" is one of four shapes. They have very different correctness properties.</p>
+<h3 id="topology1synchronousdualwriteatthefacade">Topology 1: synchronous dual write at the facade</h3>
+<p>The naive picture above. Facade writes to old, then to new, returns success only when both succeed.</p>
+<ul>
+<li><strong>Latency</strong> is the sum of both.</li>
+<li><strong>Atomicity</strong> is broken. See the previous section.</li>
+<li><strong>Failure modes</strong> are nasty.</li>
+</ul>
+<p>Don't ship this. It looks tempting because it's three lines of code, and those three lines are the bug.</p>
+<h3 id="topology2oldwritestoitsdboutboxnewconsumesevents">Topology 2: old writes to its DB + outbox; new consumes events</h3>
+<p>The shape I reach for whenever the old system is something I can modify:</p>
+<pre><code>client → facade → old (writes DB + outbox in one txn)
+                            │
+                  ┌─────────┘ (relay)
+                  ▼
+              broker
+                  │
+                  ▼
+                new (applies event idempotently)
+</code></pre>
+<p>The old system writes its database row <em>and</em> an outbox row in a single local transaction. A relay process publishes the outbox rows to a broker. The new system consumes from the broker and applies the change to its own store, idempotently.</p>
+<p>Why this works:</p>
+<ul>
+<li><strong>Atomicity is contained.</strong> The old service has a single local transaction. Either both rows commit or neither does.</li>
+<li><strong>New is eventually consistent.</strong> There's a window, usually seconds, where old has the new state and new doesn't. That's fine, because reads still come from old during the shadow phase.</li>
+<li><strong>Replays are safe.</strong> The relay can publish a message twice; the new system absorbs the duplicate because its writes are idempotent. (This is where <a href="/idempotency-keys-deduped-writes">idempotency keys</a> earn their keep at the consumer side.)</li>
+<li><strong>The old service doesn't need to know the new service exists.</strong> The relay does.</li>
+</ul>
+<p>This is what "dual writes" actually means in production, even when people say things that sound synchronous.</p>
+<h3 id="topology3cdcbasedshadowing">Topology 3: CDC-based shadowing</h3>
+<p>Sometimes you can't modify the old service: vendor system, legacy code no one wants to touch, an external partner. Then you can read the old system's database write-ahead log via <a href="https://github.com/debezium/debezium">Debezium</a> (or similar) and project the changes onto the new system.</p>
+<pre><code>old DB ──(WAL)──→ Debezium ──→ broker ──→ new
+</code></pre>
+<ul>
+<li><strong>No application changes on old.</strong> The cleanest property of this approach.</li>
+<li><strong>Schema coupling.</strong> Debezium sees what changed at the table/column level, not at the semantic intent level. If your old service does a bulk <code>UPDATE</code> that means "rebill these customers", the CDC stream shows a flurry of column updates. The new service has to know how to interpret them.</li>
+<li><strong>DDL is dangerous.</strong> A column rename on the old side, undeclared to the consumer, breaks the projection. Coordinate.</li>
+</ul>
+<p>CDC is the right tool when you don't own the source. When you do own the source, an outbox is usually less coupled and easier to reason about.</p>
+<h3 id="topology4applicationlayerdualwrite">Topology 4: application-layer dual write</h3>
+<p>The variant I keep seeing people <em>try</em>:</p>
+<pre><code class="ruby language-ruby">def create_invoice(attrs)
+  ActiveRecord::Base.transaction do
+    invoice = Invoice.create!(attrs)
+    NewBillingService.create_invoice(invoice)  # ← HTTP call, inside the txn
+    invoice
+  end
+end
+</code></pre>
+<p>Two reasons not to:</p>
+<ol>
+<li><strong>The HTTP call is inside the transaction.</strong> If the new service is slow, the old service's transaction holds row locks for as long as the call takes. Pathological under load.</li>
+<li><strong>The atomicity is fake.</strong> If the HTTP call succeeds and the local commit then fails, the new service has been told about an invoice the old service never finalized.</li>
+</ol>
+<p>A pragmatic middle ground exists: write the local row in the transaction; enqueue a job that publishes to the new service; the job is idempotent and retried. That's just an outbox without the table. It works at small scale. It gets fragile fast.</p>
+<p>If you find yourself reaching for topology 4, walk to topology 2 instead. It's not much more code and it's correct.</p>
+<h2 id="readsduringdualwrite">Reads during dual write</h2>
+<p>The other half of the picture: where do reads go?</p>
+<p>Three phases, in order:</p>
+<ol>
+<li><strong>Shadow.</strong> Reads from old. New is receiving writes but its state is purely for verification.</li>
+<li><strong>Verify.</strong> Reads from old, <em>and also</em> from new in the background, with the responses compared and the difference logged.</li>
+<li><strong>Cutover.</strong> Reads from new, per-customer behind a feature flag.</li>
+</ol>
+<p>The verify phase is where the bugs surface. Canonicalize responses before comparing (JSON field order, decimal formatting, timestamp timezones, all the boring stuff). I described the diff log format in the <a href="/migrating-billing-rails-to-go#phase-2--shadow">billing migration post</a>; it applies here verbatim.</p>
+<p>If the diff is dirty, you do <strong>not</strong> progress to cutover. The whole point of running dual is that you can see disagreement before customers do.</p>
+<h2 id="theinstantrollbackproperty">The instant-rollback property</h2>
+<p>People forget that dual writes during cutover are also the rollback story.</p>
+<p>While you're dual-writing, <strong>the old system is still receiving every write</strong>. Its state is authoritative and current. If something goes wrong on the new side, you flip the feature flag, reads go back to old, and not a single customer's data is lost.</p>
+<p>This is the property that makes a strangler fig migration <em>safe</em>.</p>
+<p>Stop dual-writing too early (say, you "decommission" the old write path before you have confidence in the new one) and you've lost the rollback. Now any new-side bug is a real outage.</p>
+<h2 id="whentostopdualwriting">When to stop dual-writing</h2>
+<p>Three signals, all required:</p>
+<ol>
+<li><strong>You've been reading from new exclusively for N days, no rollbacks.</strong> N is at least a week; for billing or other money-touching paths, longer.</li>
+<li><strong>The verification diff has been clean for N weeks.</strong> Including during peak traffic and at month boundaries (cron jobs, monthly closings, all the seasonal weirdness).</li>
+<li><strong>No code path still reads from the old system for that capability.</strong> Including background jobs, reports, internal dashboards, the support tooling, <em>everything</em>. If anything still reads from old, you can't turn off writes to old.</li>
+</ol>
+<p>Only then: drop the dual write, retire the old write path, delete the code.</p>
+<p>This phase has an expiry date attached. <strong>Schedule the removal of the dual-write code as part of the plan that introduces it.</strong> Otherwise it stays in your codebase for years. Dead code rots, alarms fire for systems no one uses anymore, and the dual write turns into a footgun.</p>
+<h2 id="antipatterns">Anti-patterns</h2>
+<p>A few patterns I've seen go wrong, with the failure mode:</p>
+<p><strong>Dual writes without verification.</strong> You write to both systems and pray they agree. They don't. The divergence is silent because no one is comparing. By the time you notice (usually months later, often via a customer support ticket), there's no way to know which side is "right" and you have to manually reconcile. Verification is not optional.</p>
+<p><strong>Per-percent traffic split before per-customer split.</strong> Each request is independently routed. A user sees inconsistent results across requests in the same session: their invoice list comes from new, their detail comes from old, the totals don't add up. Always slice by <em>customer</em>, never by <em>request</em>. Once you cut a customer over, every request from that customer goes to the same side. I keep saying this and it keeps mattering.</p>
+<p><strong>Synchronous dual writes that double latency.</strong> Even when atomicity is somehow handled, doing two HTTP calls per write doubles your write-path latency. At any meaningful scale this shows up in p99s and starts paging on-call. Async or outbox topology, always.</p>
+<p><strong>Forgetting deletion semantics.</strong> A delete on old needs to propagate to new. Does it? What about soft delete vs hard delete? What about tombstones in the event stream? Deletes are the most under-thought operation in dual-write designs. They're also the operation that silently drifts the systems farthest apart over time.</p>
+<p><strong>No plan to remove the dual write.</strong> The PR that adds the dual write should have a tracking ticket for its removal. The ticket should have a date attached. Otherwise the dual write becomes load-bearing for things no one remembers, and removing it years later is its own migration.</p>
+<p><strong>Reverse-engineering the new system to match a bug in the old one.</strong> During verification, you'll find diffs caused by <em>bugs in the old system</em>. The old system is "right" only in the sense that it's what customers see today. Sometimes the right answer is to fix the bug in both. Sometimes it's to bake the bug into the new system intentionally because customers depend on the bug-shaped behavior. Both are legitimate. What isn't is finding the diff and not making a decision.</p>
+<h2 id="howthepiecescompose">How the pieces compose</h2>
+<p>So, lining them up:</p>
+<ul>
+<li><strong>The strangler fig</strong> gives you the topology: facade in front, capabilities replaced one at a time, old system retired at the end.</li>
+<li><strong>Dual writes</strong> give you the data. The new system stays hot while old is authoritative.</li>
+<li><strong>The outbox pattern</strong> gives you the <em>correctness</em> of the dual write: atomic local commit + asynchronous replication.</li>
+<li><strong>Idempotency keys</strong> give you the <em>safety</em> on the consumer, so the new system can absorb duplicates without diverging.</li>
+<li><strong>Per-customer feature flags</strong> give you the <em>cutover</em>: one slice at a time, instant rollback.</li>
+<li><strong>Verification (diff logs)</strong> gives you the <em>confidence</em>. You can prove old and new agree before betting on new.</li>
+</ul>
+<p>Take any one of those out and the migration gets a lot more dangerous. Take them all out and you're doing a big-bang rewrite and praying.</p>
+<h2 id="lessonsikeepcomingbackto">Lessons I keep coming back to</h2>
+<ol>
+<li><strong>The facade is the load-bearing piece, not the new code.</strong> Build it first. Make it invisible. Earn the right to slot the new system in behind it.</li>
+<li><strong>"Dual write" is not a primitive. Outbox is the primitive.</strong> Anyone who tells you to "just write to both" is glossing over the atomicity problem.</li>
+<li><strong>Dual writes are also the rollback.</strong> Don't stop dual-writing until you're sure you won't need to read from old again.</li>
+<li><strong>Reads slice per-customer. Never per-percent.</strong> Consistency within a session matters.</li>
+<li><strong>Verification is what makes dual writes safe.</strong> Without a diff log they're an expensive pretence.</li>
+<li><strong>Schedule the removal at the same time as the introduction.</strong> Otherwise the dual-write outlives its usefulness by years.</li>
+</ol>
+<p>The strangler fig is slow and deliberate. Build the facade first, dual-write through an outbox, verify obsessively, slice per-customer, and the host quietly disappears one capability at a time.</p>
+<p>Mind your reads. Watch the diff. And take the dual-write code out when you're done.</p>
+<h2 id="references">References</h2>
+<p><strong>Patterns</strong></p>
+<ul>
+<li><a href="https://martinfowler.com/bliki/StranglerFigApplication.html">Strangler Fig Application — Martin Fowler</a></li>
+<li><a href="https://microservices.io/patterns/refactoring/strangler-application.html">Strangler pattern (microservices.io)</a></li>
+<li><a href="https://microservices.io/patterns/data/transactional-outbox.html">Transactional outbox pattern (microservices.io)</a></li>
+<li><a href="https://microservices.io/patterns/data/saga.html">Saga pattern (microservices.io)</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Two-phase_commit_protocol">Two-phase commit protocol — Wikipedia</a></li>
+</ul>
+<p><strong>Tools mentioned</strong></p>
+<ul>
+<li><a href="https://github.com/debezium/debezium">Debezium</a>: change-data-capture for relational databases</li>
+</ul>
+<p><strong>Related posts</strong></p>
+<ul>
+<li><a href="/migrating-billing-rails-to-go">Migrating a billing system from Rails to Go</a></li>
+<li><a href="/saga-and-outbox">Saga and the outbox</a></li>
+<li><a href="/idempotency-keys-deduped-writes">Idempotency keys — the request you can replay</a></li>
+<li><a href="/go-transaction-manager-commit-errors">The Go transaction manager bug that ate my rollback</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Idempotency keys — the request you can replay</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-12-21">Sun, December 21, 2025</time>
+        <h1 class="mar-b-7">Idempotency keys — the request you can replay</h1>
+    </header>
+    <h1 id="idempotencykeystherequestyoucanreplay">Idempotency keys — the request you can replay</h1>
+<p>It's the end of the year, I've been ramping down on building, and I've been doing more reading than typing. One topic I keep coming back to is <strong>idempotency</strong>, specifically the pattern of accepting an <code>Idempotency-Key</code> header on write endpoints so a client can safely retry without producing duplicate side effects.</p>
+<p>It's a deceptively simple idea. The first time I sketched it on a whiteboard I thought I'd finished in five minutes. Two months later I was still patching edge cases. This post is the version of the explanation I wish I'd had then.</p>
+<h2 id="theproblemplainly">The problem, plainly</h2>
+<p>You have an HTTP endpoint that does something with a side effect: charge a card, send an email, create an order. A client calls it. Then:</p>
+<ul>
+<li>the request times out before the response comes back,</li>
+<li>or the connection drops,</li>
+<li>or the load balancer hiccups,</li>
+<li>or the client's process crashes and a watchdog retries.</li>
+</ul>
+<p>The client doesn't know whether the request succeeded. It retries. If your server is naïve, you've now done the side effect twice.</p>
+<p>The fix from the client's side is to attach a unique key per <em>logical request</em>. The fix from the server's side is to use that key to recognize a retry and return the <em>original</em> response instead of executing again.</p>
+<p>That key is the idempotency key.</p>
+<h2 id="whatthesameresponsereallymeans">What "the same response" really means</h2>
+<p>The naïve mental model: "if a key matches a previous request, return what the previous request returned."</p>
+<p>The actual model needs more nuance:</p>
+<ol>
+<li><strong>The same key with the same request body</strong> → return the cached response.</li>
+<li><strong>The same key with a <em>different</em> request body</strong> → reject with <code>422</code>. The client is using the key wrong; do not silently coalesce.</li>
+<li><strong>The same key while the original is still in flight</strong> → don't both execute. The second one should either wait for the first or be rejected with <code>409 Conflict</code>.</li>
+</ol>
+<p>Number three is the one people skip.</p>
+<h2 id="asimpletableschema">A simple table schema</h2>
+<p>The minimum viable backing store is a single table:</p>
+<pre><code class="sql language-sql">CREATE TABLE idempotency_records (
+    key             TEXT        PRIMARY KEY,
+    request_hash    TEXT        NOT NULL,
+    state           TEXT        NOT NULL CHECK (state IN ('in_flight', 'completed')),
+    response_status INTEGER,
+    response_body   JSONB,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at    TIMESTAMPTZ
+);
+
+CREATE INDEX ON idempotency_records (created_at);
+</code></pre>
+<p><code>request_hash</code> is a hash of the request body (or the request body plus selected headers). It's how you detect "same key, different body". <code>state</code> is how you detect in-flight duplicates.</p>
+<h2 id="theflow">The flow</h2>
+<p>The flow at request time:</p>
+<pre><code>1. INSERT (key, hash(body), state='in_flight') ON CONFLICT DO NOTHING.
+2. If the insert happened (i.e. no conflict), we own the key. Execute the operation.
+   On success: UPDATE state='completed', response_status, response_body.
+   On failure: DELETE the row, so the next retry can attempt fresh.
+3. If the insert conflicted, fetch the existing row.
+   - If hash matches and state='completed': return the cached response.
+   - If hash matches and state='in_flight': return 409, or wait, depending on your contract.
+   - If hash mismatches: return 422 (key reuse on a different request).
+</code></pre>
+<p><strong>"Delete the row on failure" feels scary.</strong> It is. The first time I implemented this, I treated failed operations as terminal: once a key sees a 500, that key is poisoned forever. Users hated it. The compromise I landed on: distinguish <em>retriable</em> failures (network blip to upstream, transient DB error) from <em>terminal</em> failures (validation error, business rule rejection). Retriable → delete the row, let the client retry. Terminal → mark <code>completed</code> with the error response, because the next call will get the same error and at least it'll be fast.</p>
+<p><strong>"Return 409 for in-flight" feels wrong.</strong> Doesn't this defeat the point of idempotency? No. It prevents the <em>server</em> from running the same job concurrently. The client can retry the 409 a few hundred milliseconds later, by which time the original will have completed (or timed out and been cleaned up). The point is to dedupe <em>effects</em>, not to replay in-flight requests.</p>
+<p><strong>"Hash the request body" needs care.</strong> Two requests with identical <em>semantic</em> bodies but different JSON field ordering should be treated as the same. So canonicalize before hashing: sort keys, normalize whitespace, drop fields you don't care about (like <code>request_id</code>).</p>
+<h2 id="theracethedatabasehastowin">The race the database has to win</h2>
+<p>The whole thing hinges on step 1 being atomic. Two concurrent requests with the same key must result in exactly one winner of the insert. That's why it's <a href="https://www.postgresql.org/docs/current/sql-insert.html"><code>INSERT ... ON CONFLICT DO NOTHING</code></a> (Postgres) and not "SELECT then INSERT".</p>
+<p>A useful sanity check: if your database doesn't support a single-statement "insert if not exists with row-level locking", you can't implement this correctly with that database. Don't reach for <code>SELECT ... FOR UPDATE</code> followed by <code>INSERT</code>. There's a window between the two where another transaction can insert under you.</p>
+<p>In Postgres specifically, you want <code>INSERT ... ON CONFLICT (key) DO NOTHING RETURNING *</code>. If the returning set is empty, you lost the race; fetch the existing row. If it has a row, you won; you own the key.</p>
+<h2 id="scopeandexpiration">Scope and expiration</h2>
+<p>Idempotency keys can't live forever.</p>
+<ul>
+<li><strong>Scope per account / API client.</strong> Two different customers can legitimately use the same key string. The primary key should be <code>(account_id, key)</code>, not <code>key</code>.</li>
+<li><strong>Expire after some window.</strong> 24 hours is a reasonable default for most APIs, and <a href="https://docs.stripe.com/api/idempotent_requests">Stripe uses 24 hours</a>. Long enough to cover any reasonable retry window, short enough that the table doesn't grow without bound.</li>
+<li><strong>Garbage-collect with a periodic job, not a <code>DELETE</code> on every request.</strong> Per-request cleanup adds latency to every write.</li>
+</ul>
+<pre><code class="sql language-sql">DELETE FROM idempotency_records
+WHERE created_at &lt; now() - interval '24 hours';
+</code></pre>
+<p>Run it every hour. Done.</p>
+<h2 id="whatitdoesnotsolve">What it does NOT solve</h2>
+<p>This pattern handles <strong>duplicate writes to one service</strong>. It does not handle:</p>
+<ul>
+<li><strong>Distributed atomicity across services.</strong> Charging a card <em>and</em> sending a confirmation email atomically is a different problem. (Look up "outbox pattern" or "saga". I'll write about those soon.)</li>
+<li><strong>Concurrent updates to a single resource.</strong> "Two users editing the same record at the same time" is an optimistic-concurrency problem, not an idempotency one.</li>
+<li><strong>Replay attacks.</strong> If an attacker observes a request, they can re-use the key, but that's the attacker forging a request. Idempotency assumes the key is a <em>correctness</em> tool, not a <em>security</em> tool.</li>
+</ul>
+<p>People conflate these regularly. Idempotency keys solve one specific problem: a client retried because it didn't know whether the original landed. Don't try to make them do anything else.</p>
+<h2 id="thewhatiftheresponseishugetrap">The "what if the response is huge" trap</h2>
+<p>A trap I fell into early: storing the full response body in the idempotency record.</p>
+<p>That works fine when responses are small. It breaks when one of your endpoints returns a paginated list of 500 items, and now every retry is duplicating those bytes into the idempotency table. The table grows fast. Backups grow faster.</p>
+<ol>
+<li><strong>Cap the cached response size.</strong> If the response is over some limit, mark the record as "completed but body not cached" and have the retry re-execute. As long as the operation is genuinely idempotent server-side, the second execution returns the same answer.</li>
+<li><strong>Reference, don't copy.</strong> Store an ID that points to the result (e.g. "order_id"), and let the retry re-fetch the body from the order table.</li>
+</ol>
+<p>(1) is simpler. (2) is more correct. I usually start with (1) and graduate to (2) if the endpoint earns it.</p>
+<h2 id="lessons">Lessons</h2>
+<p>A few things that I keep relearning, and that this post exists to keep me from forgetting:</p>
+<ol>
+<li><strong>Idempotency is about deduping side effects, not replaying responses.</strong> The "return the cached response" part is convenient. The "don't double-execute" part is the point.</li>
+<li><strong>The atomic insert is the entire correctness argument.</strong> If you don't have it, you don't have idempotency. You have a race.</li>
+<li><strong>In-flight conflicts deserve a real status code.</strong> <code>409</code> is for that. Don't let two copies of the same job run concurrently because you couldn't be bothered to handle the case.</li>
+<li><strong>Distinguish retriable from terminal failures.</strong> Poisoning a key on a network blip is a user-hostile bug.</li>
+<li><strong>Hash a <em>canonicalized</em> request body.</strong> JSON field order is not stable.</li>
+<li><strong>Cap cached response size.</strong> Or learn to love big tables.</li>
+</ol>
+<p>I keep coming back to this pattern because the moment you have a write endpoint that can be called from a flaky network (which is every write endpoint, ever), you need it.</p>
+<p>Happy retrying.</p>
+<h2 id="references">References</h2>
+<ul>
+<li>Stripe: <a href="https://docs.stripe.com/api/idempotent_requests">Idempotent requests</a></li>
+<li>PostgreSQL: <a href="https://www.postgresql.org/docs/current/sql-insert.html"><code>INSERT ... ON CONFLICT</code></a></li>
+<li>HTTP 409 Conflict: <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/409">MDN</a></li>
+<li>HTTP 422 Unprocessable Content: <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/422">MDN</a></li>
+<li>Related: <a href="/saga-and-outbox">Saga and the outbox</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

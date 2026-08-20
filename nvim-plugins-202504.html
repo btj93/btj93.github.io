@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Neovim Plugins Recommendations</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-04-27">Sun, April 27, 2025</time>
+        <h1 class="mar-b-7">Neovim Plugins Recommendations</h1>
+    </header>
+    <h1 id="pluginsiveinstalledin2025">Plugins I've installed in 2025</h1>
+<p>Almost one year into using Neovim, I've installed a lot of plugins.</p>
+<p>Starting from the <a href="https://www.lazyvim.org/">LazyVim distro</a>, my Neovim configuration has come a long way.</p>
+<p>In the amazing community that is the Neovim ecosystem, new plugins are being developed and released every day. Being an engineer, naturally one would be tempted to try those shiny new plugins. The question remains that whether they are good enough to stay in the config.</p>
+<p>In this post, I'll list the plugins I've installed this year and are still using.</p>
+<h2 id="avantenvimhttpsgithubcomyetoneavantenvim"><a href="https://github.com/yetone/avante.nvim">avante.nvim</a></h2>
+<div class="github-card" data-github="yetone/avante.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>With Cursor IDE entering the market, many have been amazed by the possibilities of AI-enabled IDEs.</p>
+<p>It is no surprise that many people are looking for an alternative in Neovim.</p>
+<p><code>avante.nvim</code> provides AI assistance for neovim. Uses a prompt interface to communicate with large language models to generate code, documentation, and comments.</p>
+<p>It supports multiple models, including openai, gemini and more.</p>
+<p>Integrates with NeoVim to allow seamless file attaching to the prompt.</p>
+<p>Provides a git diff view for the code suggestions by the LLM model, allowing the user to choose each suggestion hunk and apply it to the file.</p>
+<h2 id="claspnvimhttpsgithubcomxzbdmwclaspnvim"><a href="https://github.com/xzbdmw/clasp.nvim">clasp.nvim</a></h2>
+<div class="github-card" data-github="xzbdmw/clasp.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>Have you ever wanted to quickly move the position of the brackets in your code?</p>
+<pre><code class="go language-go">myFunc(arg1, arg2, arg3)
+</code></pre>
+<p>When we want to wrap the code with another function, what we do is:</p>
+<pre><code class="go language-go">myFunc2(myFunc(arg1, arg2, arg3)
+</code></pre>
+<p>Then we have to move the cursor to the end of the first function and insert the close bracket.</p>
+<pre><code class="go language-go">myFunc2(myFunc(arg1, arg2, arg3))
+</code></pre>
+<p>Here is <code>clasp.nvim</code> to the rescue!</p>
+<p>It allows you to quickly wrap the close bracket to the next possible position.</p>
+<blockquote>
+  <p><strong>Here is a demo of the plugin in action, yoinked from the <code>clasp.nvim</code> README:</strong></p>
+</blockquote>
+<video src="https://github.com/user-attachments/assets/8f09f5ff-00ef-45dd-a76e-a40c8ecd09c1" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-width:640px; min-width: 200px">
+</video>
+<hr />
+<p>With <code>clasp.nvim</code>, you can now wrap the close bracket painlessly with a single keypress.</p>
+<pre><code class="go language-go">myFunc2(myFunc(arg1, arg2, arg3)
+</code></pre>
+<p>The default keymap is <code>&lt;c-l&gt;</code>, but you can change it to anything you like.</p>
+<p>After one <code>&lt;c-l&gt;</code>:</p>
+<pre><code class="go language-go">myFunc2(myFunc)(arg1, arg2, arg3)
+</code></pre>
+<p>After two <code>&lt;c-l&gt;</code>:</p>
+<pre><code class="go language-go">myFunc2(myFunc(arg1, arg2, arg3))
+</code></pre>
+<p>Voila! You have now placed the close bracket in the correct position.</p>
+<p>It is by no means life-changing plugin, but it is a great tool for QoL and productivity.</p>
+<h2 id="colorfulmenunvimhttpsgithubcomxzbdmwcolorfulmenunvim"><a href="https://github.com/xzbdmw/colorful-menu.nvim">colorful-menu.nvim</a></h2>
+<div class="github-card" data-github="xzbdmw/colorful-menu.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>This plugin is a complementary plugin to <code>nvim-cmp</code> and <code>blink.cmp</code>.</p>
+<p>It provides a nicer UI for the completion menu, with a more colorful and visually appealing design.</p>
+<blockquote>
+  <p><strong>Screenshot from the plugin's README</strong></p>
+</blockquote>
+<p><img src="https://github.com/user-attachments/assets/9fcb9725-5385-4ce3-afe5-74c0e57d9893" alt="Colorful Menu" /></p>
+<p>Out of the box, it supports the following programming languages:</p>
+<ul>
+<li>Rust</li>
+<li>Go</li>
+<li>TypeScript</li>
+<li>Lua</li>
+<li>C</li>
+<li>C++</li>
+<li>PHP</li>
+<li>Zig</li>
+<li>C#</li>
+<li>Python</li>
+<li>Dart</li>
+</ul>
+<p>Here is another comparison of before and after in Go:</p>
+<p>Before:
+<img src="https://github.com/user-attachments/assets/94ed9b8d-1c81-41b3-b406-2e2340909483" alt="Before" /></p>
+<p>After:
+<img src="https://github.com/user-attachments/assets/12f98543-8794-4128-9e6c-f3b66606ff75" alt="After" /></p>
+<p>It shows the type of the variable / type in the completion menu. For package names, it shows the package path on the right, which is quite useful when you have multiple packages with the same package name.</p>
+<h2 id="contextindentnvimhttpsgithubcomwurlicontextindentnvim"><a href="https://github.com/wurli/contextindent.nvim">contextindent.nvim</a></h2>
+<div class="github-card" data-github="wurli/contextindent.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>If you work on markdown files, you will love this plugin.</p>
+<p>It has always been a pain to indent code blocks in markdown files.</p>
+<p>It provides a contextual indentation for a filetype embedded inside another type of file.</p>
+<p>For example, if you have a embedded javascript inside a HTML file, you can indent the javascript code block correctly.</p>
+<p>The demo below shows the indentation of embedded R language and Python language inside a markdown file.</p>
+<blockquote>
+  <p><strong>Demo from the plugin's README</strong></p>
+</blockquote>
+<p><img src="https://github.com/user-attachments/assets/fcc3dd6e-8690-4f31-b858-b7481ccf0b66" alt="demo" /></p>
+<h2 id="csvviewnvimhttpsgithubcomhat0umacsvviewnvim"><a href="https://github.com/hat0uma/csvview.nvim">csvview.nvim</a></h2>
+<div class="github-card" data-github="hat0uma/csvview.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>This plugin provides a nicer UI for the CSV file, especially when you have a large CSV file:</p>
+<ul>
+<li><strong>Tabular view</strong>: shows the data in a tabular format, making it easier to read and navigate, especially when you have columns for days.</li>
+<li><strong>Sticky header</strong>: keeps the header row at the top of the screen, making it easier to find the data you are looking for.</li>
+<li><strong>Async loading</strong>: loads the data asynchronously, keeps the UI responsive even when the CSV file is large.</li>
+</ul>
+<blockquote>
+  <p><strong>Demo from the plugin's README</strong></p>
+</blockquote>
+<video src="https://btj93.github.io/nvim-plugins-202504/csvview-nvim.mp4" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-width:640px; min-width: 200px">
+</video>
+<h2 id="d2vimhttpsgithubcomterrastructd2vim"><a href="https://github.com/terrastruct/d2-vim">d2-vim</a></h2>
+<div class="github-card" data-github="terrastruct/d2-vim" data-width="400" data-height="" data-theme="default"></div>
+<p>Since I ditched <a href="https://mermaid.js.org/">mermaid.js</a>, I have been using d2-vim to draw diagrams in neovim.</p>
+<p>When not using the plguin, all the code is white. But when using it, the code is highlighted correctly and helps with readability.</p>
+<p>When paring with <a href="https://github.com/stevearc/overseer.nvim">overseer</a> and the d2 cli live preview, it provides a nice workflow for drawing diagrams.</p>
+<h2 id="dropbarnvimhttpsgithubcombekaboodropbarnvim"><a href="https://github.com/Bekaboo/dropbar.nvim">dropbar.nvim</a></h2>
+<div class="github-card" data-github="Bekaboo/dropbar.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>Do you ever miss the breadcrumbs on the top of the buffer? I certainly do.</p>
+<p><code>dropbar.nvim</code> is a well-polished, IDE-like, highly-customizable winbar for Neovim with drop-down menu support.</p>
+<p>Not only does it shows the current buffer path, but it also gather information from the lsp, and treesitter, such that it can show the current function, class, or variable.</p>
+<blockquote>
+  <p><strong>Preview from the plugin's README</strong></p>
+</blockquote>
+<p><img src="https://github.com/Bekaboo/dropbar.nvim/assets/76579810/93f33b90-4f42-459c-861a-1e70114ba6f2" alt="preview" /></p>
+<h2 id="gxnvimhttpsgithubcomchrishrbgxnvim"><a href="https://github.com/chrishrb/gx.nvim">gx.nvim</a></h2>
+<div class="github-card" data-github="chrishrb/gx.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>Check this plugin out for enhanced <code>gx</code> functionality, including:</p>
+<ul>
+<li><code>gx</code> with your cursor on top of a plugin name to open the plugin github page in the browser</li>
+<li>the word/selection is automatically searched on the web, if there is no url found under the cursor</li>
+</ul>
+<p><img src="https://btj93.github.io/nvim-plugins-202504/gx-nvim.png" alt="gx.nvim" /></p>
+<h2 id="harpoonhttpsgithubcomtheprimeagenharpoontreeharpoon2"><a href="https://github.com/ThePrimeagen/harpoon/tree/harpoon2">harpoon</a></h2>
+<div class="github-card" data-github="ThePrimeagen/harpoon" data-width="400" data-height="" data-theme="default"></div>
+<p>This is a famous plugin that allows you to pin files to a certain set of keymaps.</p>
+<p>It is a great plugin for keeping track of files you are working on.</p>
+<p>This is an example keymaps for the plugin yoinked from the [README]:</p>
+<pre><code class="lua language-lua">local harpoon = require("harpoon")
+
+-- REQUIRED
+harpoon:setup()
+-- REQUIRED
+
+vim.keymap.set("n", "&lt;leader&gt;a", function() harpoon:list():add() end)
+vim.keymap.set("n", "&lt;C-e&gt;", function() harpoon.ui:toggle_quick_menu(harpoon:list()) end)
+
+vim.keymap.set("n", "&lt;C-h&gt;", function() harpoon:list():select(1) end)
+vim.keymap.set("n", "&lt;C-t&gt;", function() harpoon:list():select(2) end)
+vim.keymap.set("n", "&lt;C-n&gt;", function() harpoon:list():select(3) end)
+vim.keymap.set("n", "&lt;C-s&gt;", function() harpoon:list():select(4) end)
+
+-- Toggle previous &amp; next buffers stored within Harpoon list
+vim.keymap.set("n", "&lt;C-S-P&gt;", function() harpoon:list():prev() end)
+vim.keymap.set("n", "&lt;C-S-N&gt;", function() harpoon:list():next() end)
+</code></pre>
+<blockquote>
+  <p>Note that this plugin does not come with a default keymap. You must install it and add your own keymaps.</p>
+</blockquote>
+<p>Now you can use <code>&lt;leader&gt;a</code> to add a file to the harpoon list.</p>
+<p>You can use <code>&lt;C-e&gt;</code> to toggle the quick menu. It shows the list of files in the harpoon list.</p>
+<p>You can use <code>&lt;C-h&gt;</code>, <code>&lt;C-t&gt;</code>, <code>&lt;C-n&gt;</code>, and <code>&lt;C-s&gt;</code> to navigate through the list.</p>
+<h3 id="bonus">Bonus</h3>
+<p>Here is my <a href="https://github.com/btj93/neovim-config/blob/master/lua/plugins/harpoon.lua">personal config</a> for harpoon, inspired by the <a href="https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/plugins/extras/editor/harpoon2.lua">LazyVim config</a>:</p>
+<pre><code class="lua language-lua">return {
+  "ThePrimeagen/harpoon",
+  branch = "harpoon2",
+  dependencies = { "nvim-lua/plenary.nvim" },
+  config = true,
+  opts = {
+    settings = {
+      sync_on_ui_close = true,
+    },
+  },
+  keys = function()
+    local keys = {
+      {
+        "&lt;leader&gt;ha",
+        function()
+          require("harpoon"):list():add()
+        end,
+        desc = "Add file to harpoon",
+      },
+      {
+        "&lt;leader&gt;hl",
+        function()
+          require("harpoon").ui:toggle_quick_menu(require("harpoon"):list())
+        end,
+        desc = "Harpoon quick menu",
+      },
+    }
+
+    for i = 1, 4 do
+      table.insert(keys, {
+        "&lt;leader&gt;" .. i,
+        function()
+          require("harpoon"):list():select(i)
+        end,
+        desc = "Harpoon to File " .. i,
+      })
+      table.insert(keys, {
+        "&lt;leader&gt;d" .. i,
+        function()
+          local l = require("harpoon"):list():length()
+          require("harpoon"):list():remove_at(i)
+          for j = i + 1, l do
+            local item = require("harpoon"):list():get(j)
+            require("harpoon"):list():replace_at(j - 1, item)
+          end
+        end,
+        desc = "Harpoon Remove File " .. i,
+      })
+    end
+    return keys
+  end,
+}
+</code></pre>
+<p>Keymap overview:</p>
+<ul>
+<li><code>&lt;leader&gt;ha</code>: add file to harpoon</li>
+<li><code>&lt;leader&gt;hl</code>: toggle harpoon quick menu</li>
+<li><code>&lt;leader&gt;1</code>, <code>&lt;leader&gt;2</code>, <code>&lt;leader&gt;3</code>, <code>&lt;leader&gt;4</code>: select file from harpoon list</li>
+<li><code>&lt;leader&gt;d1</code>, <code>&lt;leader&gt;d2</code>, <code>&lt;leader&gt;d3</code>, <code>&lt;leader&gt;d4</code>: remove file from harpoon list</li>
+</ul>
+<h2 id="harpoonfilesnvimhttpsgithubcomkiennt63harpoonfilesnvim"><a href="https://github.com/kiennt63/harpoon-files.nvim">harpoon-files.nvim</a></h2>
+<div class="github-card" data-github="kiennt63/harpoon-files.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>If you use harpoon and <a href="https://github.com/nvim-lualine/lualine.nvim"><code>lualine.nvim</code></a>, I've got the best companion plugin for it.</p>
+<p>This plugin shows the harpoon list in the lualine, with a configurable icon and list length.</p>
+<p><img src="https://btj93.github.io/nvim-plugins-202504/harpoon-files.png" alt="harpoon-files" /></p>
+<p>Since I use <code>&lt;leader&gt;1</code>, <code>&lt;leader&gt;2</code>, <code>&lt;leader&gt;3</code>, <code>&lt;leader&gt;4</code> to select files from the harpoon list. It provides a nice visual hint to the files I want to jump to.</p>
+<h2 id="dialnvimhttpsgithubcommonaqadialnvim"><a href="https://github.com/monaqa/dial.nvim">dial.nvim</a></h2>
+<div class="github-card" data-github="monaqa/dial.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>Have you ever used the increment (default: <code>&lt;C-a&gt;</code>) / decrement (default: <code>&lt;C-x&gt;</code>) keymap in vim?</p>
+<p>What it does is to increment or decrement the number under the cursor.</p>
+<p><code>dial.nvim</code> is a supercharged version of it, it takes the increment / decrement keymaps to the next level.</p>
+<p>Other than numbers, it supports:</p>
+<ul>
+<li>n-ary (2 &lt;= n &lt;= 36) integers</li>
+<li>date and time</li>
+<li>constants (an ordered set of specific strings, such as a keyword or operator)</li>
+<li><code>true</code> ⇄ <code>false</code></li>
+<li><code>&amp;&amp;</code> ⇄ <code>||</code></li>
+<li>a ⇄ b ⇄ … ⇄ z</li>
+<li>hex colors</li>
+<li>semantic version</li>
+</ul>
+<p>You can also define your own custom patterns!</p>
+<blockquote>
+  <p><strong>Example from the plugin's README</strong></p>
+</blockquote>
+<pre><code class="lua language-lua">require("dial.config").augends:register_group{
+  default = {
+    -- uppercase hex number (0x1A1A, 0xEEFE, etc.)
+    augend.user.new{
+      find = require("dial.augend.common").find_pattern("%d+"),
+      add = function(text, addend, cursor)
+          local n = tonumber(text)
+          n = math.floor(n * (2 ^ addend))
+          text = tostring(n)
+          cursor = #text
+          return {text = text, cursor = cursor}
+      end
+    },
+  },
+}
+</code></pre>
+<p>The possibilities are endless!</p>
+<h3 id="apeekintothefuture">A peek into the future</h3>
+<p>The author of the plugin is working on a new feature that allows you to increment / decrement enums from the LSP server.</p>
+<p>This is originally from a <a href="https://www.reddit.com/r/neovim/comments/1k95s17/">reddit post</a> that implemented it. Then someone suggested to add it to dial.nvim.</p>
+<p>Here is a demo from the reddit post:</p>
+<video src="https://packaged-media.redd.it/key8pi2d5exe1/pb/m2-res_720p.mp4?m=DASHPlaylist.mpd&amp;v=1&amp;e=1746590400&amp;s=07e4a45422127c205ff3b081c16f2b73d0b868b1" poster="https://external-preview.redd.it/dial-enum-members-with-c-a-c-x-v0-eTRjcnlqMmQ1ZXhlMXUw-_O886Y-UH8DXUfVv0GYwuH5RuC3s4xxJUBfMaQQ.png?width=640&amp;crop=smart&amp;format=pjpg&amp;auto=webp&amp;s=acff6cfc5667d7f9f63b68f4c9e592138936505c" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-width:640px; min-width: 200px">
+</video>
+<p>Track the PR <a href="https://github.com/monaqa/dial.nvim/pull/107">here</a> for updates!</p>
+<h2 id="minifileshttpsgithubcomechasnovskiminifiles"><a href="https://github.com/echasnovski/mini.files">mini.files</a></h2>
+<div class="github-card" data-github="echasnovski/mini.files" data-width="400" data-height="" data-theme="default"></div>
+<p>There has been a debate on which file manager plugin is the best since the dawn of time.</p>
+<p>Some stick with <a href="https://github.com/nvim-neo-tree/neo-tree.nvim"><code>neo-tree.nvim</code></a>, others prefer <a href="https://github.com/stevearc/oil.nvim"><code>oil.nvim</code></a>.</p>
+<p>New challengers have come out as well, such as <a href="https://github.com/francoiscabrol/ranger.vim"><code>ranger.vim</code></a> and <a href="https://github.com/mikavilpas/yazi.nvim"><code>yazi.nvim</code></a>.</p>
+<p>And here I swear by <a href="https://github.com/echasnovski/mini.files"><code>mini.files</code></a>!</p>
+<p><code>mini.files</code> is a file manager plugin that is lightweight, fast, and easy to use.</p>
+<p>It combines the best of both worlds. Tree-view from a file manager from <code>neo-tree.nvim</code> and vim-like editing from <code>oil.nvim</code>.</p>
+<p>Here is a demo from the plugin's README:</p>
+<video src="https://github.com/echasnovski/mini.nvim/assets/24854248/530483a5-fe9a-4e18-9813-a6d609fc89ff" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-width:640px; min-width: 200px">
+  </video>
+<p>For me, it is the best file manager plugin I have ever used.</p>
+<p>Out of the box, it does not have supports for git files and hidden files, but since it is so flexible, the community has added snippets that you can drop into your config to gain more functionality!</p>
+<blockquote>
+  <p>Here is the git integration for mini.files:</p>
+</blockquote>
+<p><a href="https://gist.github.com/bassamsdata/eec0a3065152226581f8d4244cce9051">Github Gist</a></p>
+<h2 id="namunvimhttpsgithubcombassamsdatanamunvim"><a href="https://github.com/bassamsdata/namu.nvim">namu.nvim</a></h2>
+<div class="github-card" data-github="bassamsdata/namu.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p><code>namu.nvim</code> is a feature-rich plugin that allows you to jump to symbols in your code, featuring:</p>
+<ul>
+<li><strong>Live-preview</strong>: scroll the buffer to where the symbol is located</li>
+<li><strong>Built-in fuzzy finding</strong>: search for symbols in your code</li>
+<li><strong>Multiple source</strong>: support for multiple sources, such as LSP, Treesitter, and ctags</li>
+</ul>
+<video src="https://github.com/user-attachments/assets/a97ff3b1-8b25-4da1-b276-f623e37d0368" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-width:640px; min-width: 200px">
+
+  </video>
+<h2 id="nvimbqfhttpsgithubcomkevinhwang91nvimbqf"><a href="https://github.com/kevinhwang91/nvim-bqf"><code>nvim-bqf</code></a></h2>
+<div class="github-card" data-github="kevinhwang91/nvim-bqf" data-width="400" data-height="" data-theme="default"></div>
+<p>Ever want a little floating window that shows the surrounding lines of the entries in quickfix list?</p>
+<p>I've got just that for you!</p>
+<p>nvim-bqf is a plugin that enhance the quickfix list with many features, such as:</p>
+<ul>
+<li><strong>Floating window</strong>: show the surrounding lines of the entries in quickfix list</li>
+<li><strong>Jump to the next entry</strong>: jump to the next entry in quickfix list</li>
+<li><strong>Filter items with signs</strong>: filter the entries in quickfix list with signs</li>
+<li><strong>Search and replace</strong>: search and replace in the entries in quickfix list</li>
+</ul>
+<blockquote>
+  <p>Example from the plugin's README:</p>
+</blockquote>
+<video src="https://user-images.githubusercontent.com/17562139/137736502-91d32251-96a2-4c3f-ba74-65cfd336473e.mp4" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-width:640px; min-width: 200px">
+
+  </video>
+<p><em>Disclaimer: I only use this plugin for its floating window feature. I use <a href="https://github.com/stevearc/quicker.nvim"><code>quicker.nvim</code></a> for the rest.</em></p>
+<p>When paired with <code>quicker.nvim</code>, it gives you a nice looking quickfix list like this:</p>
+<p><img src="https://btj93.github.io/nvim-plugins-202504/nvim-bqf.png" alt="nvim-bqf" /></p>
+<h2 id="nvimspiderhttpsgithubcomchrisgriesernvimspider"><a href="https://github.com/chrisgrieser/nvim-spider">nvim-spider</a></h2>
+<div class="github-card" data-github="chrisgrieser/nvim-spider" data-width="400" data-height="" data-theme="default"></div>
+<p>The <code>w</code> keymap is an important concept in vim. It is used to move between words.</p>
+<p>It is very useful for moving the cursor horizontally.</p>
+<p>While some people prefer to use <code>f</code>, or <a href="https://github.com/ggandor/leap.nvim"><code>leap.nvim</code></a>, or <a href="https://github.com/folke/flash.nvim"><code>flash.nvim</code></a>, which involves inputting characters of the destination to move the cursor horizontally,</p>
+<p>I find myself reading characters from the monitor very slow. This makes them often slower than spamming <code>e</code> or <code>w</code>.</p>
+<p>Now this works for normal paragraph written in English with each word separated by a space, how about programming languages?</p>
+<p>In programming languages, we often use snake_case, camelCase and PascalCase to write variable names, and the <code>w</code> keymap is rendered useless in this case.</p>
+<p>Imagine you've got yourself a variable name:</p>
+<pre><code class="javascript language-javascript">const myVariableName = 10
+      ^ cursor here
+</code></pre>
+<p>Now you want to move the cursor to <code>V</code>, but the <code>w</code> keymap won't do the trick. You'd ended up with:</p>
+<pre><code class="javascript language-javascript">const myVariableName = 10
+                     ^ cursor here
+</code></pre>
+<p><strong>It overshoots!</strong> Even worse, you are now required to use the painful <code>h</code>, <code>l</code> keymaps to move the cursor character by character.</p>
+<p>This has been a pain in the ass for me for a long time, until I found this plugin.</p>
+<p>This plugin provides a command that allows you to move the cursor by:</p>
+<ul>
+<li><strong>Subword motion</strong>: move the cursor by camelCase, SNAKE_CASE, or kebab-case</li>
+<li><strong>Skipping insignificant punctuation</strong>: skip punctuation characters when moving the cursor</li>
+</ul>
+<p>It provides a command, where you can either replace the default <code>w</code>, <code>e</code> and <code>b</code> keymaps, or use another key for it.</p>
+<p>When installed,</p>
+<pre><code class="javascript language-javascript">const myVariableName = 10
+      ^ cursor here
+</code></pre>
+<p>A <code>w</code> later…,</p>
+<pre><code class="javascript language-javascript">const myVariableName = 10
+        ^ cursor here
+</code></pre>
+<p>Voila! You have moved the cursor by subword motion! Now you can <em><code>w</code> all the way to downtown</em>!</p>
+<p><img src="https://btj93.github.io/nvim-plugins-202504/a-thousand-miles.jpg" alt="a-thousand-miles" /></p>
+<blockquote>
+  <p><strong>I spent way more time on this meme than I am willing to admit…</strong></p>
+</blockquote>
+<h3 id="onelittledownside">One little downside</h3>
+<p>This plugin is <em>not</em> built in mind with non-spaced languages, such as Chinese, Japanese, or Korean.</p>
+<p>It is not a problem when writing code, but if you write documents in markdown in these languages, it would just refuse to work and jump to the next space / end of line.</p>
+<p>I haven't found a solution for this yet, but a workaround is to only enable the plugin for the filetypes you need.</p>
+<h2 id="tinyglimmernvimhttpsgithubcomrachartiertinyglimmernvim"><a href="https://github.com/rachartier/tiny-glimmer.nvim">tiny-glimmer.nvim</a></h2>
+<div class="github-card" data-github="rachartier/tiny-glimmer.nvim" data-width="400" data-height="" data-theme="default"></div>
+<p>Feeling a little bit fancy today? I've got you covered!</p>
+<p><code>tiny-glimmer.nvim</code> is a plugin that provides various animations for:</p>
+<ul>
+<li>Yank</li>
+<li>Paste</li>
+<li>Next word</li>
+<li>Previous word</li>
+<li>Undo</li>
+<li>Redo</li>
+</ul>
+<blockquote>
+  <p>Example from the plugin's README:</p>
+</blockquote>
+<video src="https://github.com/user-attachments/assets/1bb98834-25d2-4f01-882f-609bec1cbe5c" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-width:640px; min-width: 200px">
+  </video>
+<p>Other than the fancy animations, it actually provides virtual cues to help the user find its location.</p>
+<p>When searching for a word, pressing <code>n</code> or <code>N</code> highlights the next word with nice and smooth animations in the buffer.</p>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

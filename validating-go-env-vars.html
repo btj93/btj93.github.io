@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Validating Go env vars at startup — one struct, one fail</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-11-15">Sat, November 15, 2025</time>
+        <h1 class="mar-b-7">Validating Go env vars at startup — one struct, one fail</h1>
+    </header>
+    <h1 id="validatinggoenvvarsatstartuponestructonefail">Validating Go env vars at startup — one struct, one fail</h1>
+<p>There's a particular flavor of production bug that I find especially upsetting, and it goes like this:</p>
+<ol>
+<li>A service deploys.</li>
+<li>Health check returns 200, because the HTTP server is up.</li>
+<li>A few hours later, a user does the one operation that needs <code>S3_BUCKET</code> to be set.</li>
+<li><code>os.Getenv("S3_BUCKET")</code> returns <code>""</code>.</li>
+<li>The service hands back an opaque 500.</li>
+</ol>
+<p>The whole class of bug is preventable, and it doesn't take much. You just have to do the work <em>at startup</em>, not lazily, and you have to make missing values <em>loud</em>.</p>
+<p>This post is about the patterns I use in Go services to do that, and the small library shape I keep reaching for.</p>
+<h2 id="theshapeiwant">The shape I want</h2>
+<p>The interface I'm aiming for at the top of <code>main.go</code> is something like this:</p>
+<pre><code class="go language-go">type Config struct {
+    HTTPPort   int    `env:"HTTP_PORT" default:"8080"`
+    DBURL      string `env:"DB_URL" required:"true"`
+    DBMaxConns int    `env:"DB_MAX_CONNS" default:"10"`
+    Debug      bool   `env:"DEBUG" default:"false"`
+    S3Bucket   string `env:"S3_BUCKET" required:"true"`
+}
+
+var cfg Config
+if err := envalid.LoadInto(&amp;cfg); err != nil {
+    log.Fatal(err)
+}
+</code></pre>
+<p>The contract I want from <code>LoadInto</code>:</p>
+<ol>
+<li><strong>Required fields fail fast.</strong> If <code>DB_URL</code> isn't set, the process should exit rather than log a warning or return a zero value.</li>
+<li><strong>Defaults are explicit.</strong> If a field has <code>default:"8080"</code>, the zero value coming out of the env should be <code>8080</code>, not <code>0</code>.</li>
+<li><strong>Type coercion is built in.</strong> <code>os.Getenv</code> returns a string. I want my <code>int</code> to be an int, my <code>bool</code> to be a bool, my <code>time.Duration</code> to be a duration.</li>
+<li><strong>Errors enumerate.</strong> If three variables are missing, tell me all three. Don't make me restart and find out about the second one only after I fix the first.</li>
+<li><strong>The list of variables is discoverable.</strong> Some component (usually a healthcheck or <code>--help</code>) should be able to enumerate every variable the service expects.</li>
+</ol>
+<h2 id="afirstcut">A first cut</h2>
+<pre><code class="go language-go">package envalid
+
+import (
+    "errors"
+    "fmt"
+    "os"
+    "reflect"
+    "strconv"
+    "time"
+)
+
+type FieldError struct {
+    Name    string
+    Reason  string
+}
+
+func (e *FieldError) Error() string {
+    return fmt.Sprintf("env %s: %s", e.Name, e.Reason)
+}
+
+func LoadInto(dst any) error {
+    v := reflect.ValueOf(dst).Elem()
+    t := v.Type()
+
+    var errs []error
+
+    for i := 0; i &lt; t.NumField(); i++ {
+        field := t.Field(i)
+        name := field.Tag.Get("env")
+        if name == "" {
+            continue
+        }
+
+        raw, ok := os.LookupEnv(name)
+        if !ok {
+            if def, hasDefault := field.Tag.Lookup("default"); hasDefault {
+                raw = def
+            } else if field.Tag.Get("required") == "true" {
+                errs = append(errs, &amp;FieldError{Name: name, Reason: "required but not set"})
+                continue
+            } else {
+                continue // not required, no default — leave zero value
+            }
+        }
+
+        if err := assign(v.Field(i), raw); err != nil {
+            errs = append(errs, &amp;FieldError{Name: name, Reason: err.Error()})
+        }
+    }
+
+    if len(errs) &gt; 0 {
+        return errors.Join(errs...)
+    }
+    return nil
+}
+
+func assign(v reflect.Value, raw string) error {
+    switch v.Kind() {
+    case reflect.String:
+        v.SetString(raw)
+    case reflect.Int, reflect.Int64:
+        // special-case time.Duration before generic int
+        if v.Type() == reflect.TypeOf(time.Duration(0)) {
+            d, err := time.ParseDuration(raw)
+            if err != nil {
+                return err
+            }
+            v.SetInt(int64(d))
+            return nil
+        }
+        n, err := strconv.ParseInt(raw, 10, 64)
+        if err != nil {
+            return err
+        }
+        v.SetInt(n)
+    case reflect.Bool:
+        b, err := strconv.ParseBool(raw)
+        if err != nil {
+            return err
+        }
+        v.SetBool(b)
+    default:
+        return fmt.Errorf("unsupported field kind: %s", v.Kind())
+    }
+    return nil
+}
+</code></pre>
+<p>Less than a hundred lines and you've got 80% of what you need. The remaining 20% is taste.</p>
+<h2 id="decisionshouldmissingvarspanicorjustcollect">Decision: should missing vars panic or just collect?</h2>
+<p>The earlier draft of this had two entry points: <code>MustLoadInto</code> (panic on any failure) and <code>LoadInto</code> (return an error).</p>
+<p>I went back and forth on this. The risk with "just return an error" is that someone will write:</p>
+<pre><code class="go language-go">_ = envalid.LoadInto(&amp;cfg) // YOLO
+</code></pre>
+<p>…and you're back to lazy failures.</p>
+<p>The compromise I like best:</p>
+<ul>
+<li>The library exposes both <code>LoadInto</code> (returns error) and <code>MustLoadInto</code> (calls <code>os.Exit(1)</code> with a formatted message).</li>
+<li>Documentation strongly recommends <code>MustLoadInto</code> for application bootstrap.</li>
+<li><code>LoadInto</code> exists because tests want it.</li>
+</ul>
+<p>For the exit path: don't <code>panic</code>. <code>panic</code> prints a stack trace and tons of noise. <code>os.Exit(1)</code> after a clean log line is a much better operator experience. Print the missing env vars as a tidy list:</p>
+<pre><code>$ ./my-service
+2025-11-15T11:00:00Z FATAL missing required environment variables:
+  - DB_URL
+  - S3_BUCKET
+exit status 1
+</code></pre>
+<p>That message tells the operator exactly which env block in the deploy config is broken.</p>
+<h2 id="decisionstructtagvsregistry">Decision: struct tag vs. registry</h2>
+<p>Two API shapes I bounced between:</p>
+<pre><code class="go language-go">// (a) struct-based, declarative
+type Config struct {
+    DBURL string `env:"DB_URL" required:"true"`
+}
+
+// (b) registry-based, imperative
+envalid.Required("DB_URL")
+envalid.Optional("HTTP_PORT", "8080")
+</code></pre>
+<p>I've shipped both at different points. Conclusions:</p>
+<ul>
+<li>The <strong>struct shape</strong> is much nicer for application code. You get autocomplete, type safety, and a place where every env var is documented.</li>
+<li>The <strong>registry shape</strong> is useful when "the set of env vars" needs to be available outside of a single struct, for example a healthcheck endpoint that lists every var the service consumes. You can derive a registry from the struct via reflection, but the inverse is messier.</li>
+</ul>
+<p>So: ship both, but optimize the struct path for ergonomics, and let the registry derive from it.</p>
+<pre><code class="go language-go">// derive a flat list of expected env names from a struct
+func KeysOf(dst any) []string { ... }
+</code></pre>
+<p>The healthcheck calls <code>KeysOf(cfg)</code> and ranges over the result. New variables in the struct automatically show up.</p>
+<h2 id="decisionhowtoencodedefaults">Decision: how to encode defaults</h2>
+<p>The <code>default:"8080"</code> tag is the simplest thing that works. But there are gotchas:</p>
+<ul>
+<li><strong>Struct field zero values vs. tag-specified defaults.</strong> If a user writes <code>cfg.HTTPPort = 8443</code> <em>before</em> calling <code>LoadInto</code>, what should happen? My take: the env var (or its default) wins. The reflection-based loader has no idea what the field's pre-call value was, and trying to detect "explicit override" is a rabbit hole.</li>
+<li><strong>Empty string is a valid value.</strong> <code>default:""</code> should <em>not</em> be the same as "no default". The library distinguishes via <code>field.Tag.Lookup("default")</code> (returns a second <code>ok</code> bool), not <code>Get("default") == ""</code>.</li>
+<li><strong>Multiline defaults are evil.</strong> I don't support them. If you have a PEM key in a default, you're doing something wrong. The default should be the simple thing, and the prod value the complex thing.</li>
+</ul>
+<h2 id="thehealthcheckwiring">The healthcheck wiring</h2>
+<p>Once the registry shape exists, the healthcheck integration is trivial:</p>
+<pre><code class="go language-go">http.HandleFunc("/healthz/env", func(w http.ResponseWriter, r *http.Request) {
+    missing := []string{}
+    for _, key := range envalid.KeysOf(&amp;cfg) {
+        if os.Getenv(key) == "" {
+            missing = append(missing, key)
+        }
+    }
+    if len(missing) == 0 {
+        w.WriteHeader(200)
+        _, _ = w.Write([]byte(`{"ok": true}`))
+        return
+    }
+    w.WriteHeader(500)
+    _ = json.NewEncoder(w).Encode(map[string]any{
+        "ok":      false,
+        "missing": missing,
+    })
+})
+</code></pre>
+<p>In practice the service would never have started if anything were missing, because <code>MustLoadInto</code> would have killed it. But this endpoint is useful for <em>post-hoc</em> drift detection, where someone rotated a secret without restarting the service. (Don't laugh. It happens.)</p>
+<h2 id="whatidonottrytodo">What I do <em>not</em> try to do</h2>
+<p>A few things this kind of library tempts you to add. I keep saying no:</p>
+<ul>
+<li><strong>Hot reload.</strong> "Watch the env and reload on change" is an enormous footgun. The right answer is "restart the service to pick up new config", and a restart is so cheap nowadays that you almost never need to make it hot.</li>
+<li><strong>Encrypted secrets.</strong> Not the library's job. Decrypt in your platform layer (KMS, sealed secrets, whatever) and inject the plaintext into the environment.</li>
+<li><strong>Hierarchical merging.</strong> YAML + env + flags + Consul + sneezing on the keyboard. Each layer of fallback doubles the surface area of "where does this value actually come from?". I would rather have one config source per environment and a clear error when it's wrong.</li>
+</ul>
+<h2 id="lessons">Lessons</h2>
+<p>A handful that I keep relearning:</p>
+<ol>
+<li><strong>Fail at startup. Loudly.</strong> A service that comes up with bad config is a service waiting to embarrass you.</li>
+<li><strong>Collect every error before reporting.</strong> Don't make the operator restart five times to find five bugs.</li>
+<li><strong>Make defaults explicit.</strong> "Zero value of <code>int</code> is <code>0</code>" is not a sane default for <code>HTTP_PORT</code>.</li>
+<li><strong>Distinguish "not set" from "set to empty string".</strong></li>
+<li><strong>Expose the list.</strong> A healthcheck or <code>--help</code> flag that enumerates expected variables is worth having.</li>
+</ol>
+<p>The whole pattern is small, and it's worth the 150 lines.</p>
+<p>Happy starting up!</p>
+<h2 id="references">References</h2>
+<ul>
+<li><code>os.LookupEnv</code>: <a href="https://pkg.go.dev/os#LookupEnv"><code>pkg.go.dev/os#LookupEnv</code></a></li>
+<li><code>reflect</code> package and <code>StructTag</code>: <a href="https://pkg.go.dev/reflect"><code>pkg.go.dev/reflect</code></a>, <a href="https://pkg.go.dev/reflect#StructTag"><code>pkg.go.dev/reflect#StructTag</code></a></li>
+<li><code>strconv</code> for type coercion: <a href="https://pkg.go.dev/strconv"><code>pkg.go.dev/strconv</code></a></li>
+<li><code>time.ParseDuration</code>: <a href="https://pkg.go.dev/time#ParseDuration"><code>pkg.go.dev/time#ParseDuration</code></a></li>
+<li><code>errors.Join</code>: <a href="https://pkg.go.dev/errors#Join"><code>pkg.go.dev/errors#Join</code></a></li>
+<li><code>os.Exit</code>: <a href="https://pkg.go.dev/os#Exit"><code>pkg.go.dev/os#Exit</code></a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

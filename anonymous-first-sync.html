@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Anonymous-first sync — adding online to an offline-first puzzle app</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2026-06-14">Sun, June 14, 2026</time>
+        <h1 class="mar-b-7">Anonymous-first sync — adding online to an offline-first puzzle app</h1>
+    </header>
+    <h1 id="anonymousfirstsyncaddingonlinetoanofflinefirstpuzzleapp">Anonymous-first sync — adding online to an offline-first puzzle app</h1>
+<p>Sudoku Flick has been fully offline since day one. You install it, you play it, you never touch the network. That was deliberate. It's a puzzle, not a service, and your statistics live on your phone.</p>
+<p>Then I got the request I'd been quietly dreading: <em>"I just got a new iPad. Can I move my progress?"</em></p>
+<p>The honest answer was no. The progress was sitting in <code>AsyncStorage</code> on the old phone, and unless you wanted to read JSON out of a <code>tar</code> of an iOS backup, that was where it stayed.</p>
+<p>So I added online sync. But I really, really didn't want to spoil the thing that made the app pleasant in the first place: no account walls, no "sign in to play", no email gate on first launch.</p>
+<div class="github-card" data-github="btj93/sudoku-flick" data-width="400" data-height="" data-theme="default"></div>
+<h2 id="theprincipletheuserisalwayssignedin">The principle: the user is <em>always</em> signed in</h2>
+<p>From the very first launch, the user has an account. They just don't know it.</p>
+<p><a href="https://supabase.com/docs/guides/auth/auth-anonymous">Supabase makes this almost embarrassingly easy</a>:</p>
+<pre><code class="ts language-ts">const { data: { session } } = await supabase.auth.getSession();
+if (!session) {
+  await supabase.auth.signInAnonymously();
+}
+</code></pre>
+<p>If there's already a session in AsyncStorage, use it. If not, create an anonymous one. From the user's perspective: nothing happens. The splash screen doesn't pause, no UI changes, no permission prompt. The app boots into the puzzle as it always did.</p>
+<p>Internally though, the world is different. The user has a Supabase user ID. <a href="https://supabase.com/docs/guides/database/postgres/row-level-security">Row Level Security</a> policies pin every database row to that ID. The sync engine has somewhere to push.</p>
+<p>This eliminates an entire class of "is sync on?" UI conditionals. There is no "sync on" toggle. There's no "create an account to back up" upsell. Backup is always on. The only thing you can opt <em>into</em> is <strong>attaching an email</strong> to the account so you can sign in again from a different device.</p>
+<p>The account exists from day one, and the email is the upgrade. Once I phrased it that way to myself, the rest of the product decisions were easy.</p>
+<h2 id="localfirstobservedfromoutside">Local-first, observed-from-outside</h2>
+<p>Existing app code does not learn about sync.</p>
+<p>Sudoku Flick has a stack of React hooks: <code>useStatistics</code>, <code>useAchievements</code>, <code>useSudokuGame</code>, <code>useUsername</code>, <code>useDailyChallenge</code>. Every one of them reads from and writes to AsyncStorage. They've been the source of truth on-device for a year. I did not want to rewrite them.</p>
+<p>So I added a new <code>SyncEngine</code> module that observes the existing write sites via small explicit calls, and feeds incoming changes back through the same hooks via subscription events.</p>
+<pre><code>┌── existing hook ──┐         ┌── SyncEngine ──┐
+│  saveGame(record) │ ──────▶ │  enqueue(...)  │
+│                   │         └────────┬───────┘
+│  reads from       │                  │
+│  AsyncStorage     │ ◀────────────────┤ emit "records:changed"
+└───────────────────┘                  │
+                                       ▼
+                                ┌──────────────┐
+                                │  Supabase    │
+                                └──────────────┘
+</code></pre>
+<p>The diff to a hook is, roughly, this:</p>
+<pre><code class="ts language-ts">async function saveGameRecord(record: GameRecord) {
+  await AsyncStorage.setItem(
+    `@sudoku_flick_records_${record.id}`,
+    JSON.stringify(record),
+  );
+  SyncEngine.enqueue({ kind: "record_upsert", record }); // ← new
+}
+</code></pre>
+<p>One line. The hook still works without the network, and it still works if Supabase is down.</p>
+<p><strong>The source of truth is local.</strong> The server is a mirror.</p>
+<p>Other approaches I considered and rejected up front:</p>
+<ul>
+<li><strong>Direct mirror.</strong> Each AsyncStorage write directly pushes to Supabase. Each pull overwrites local. Sounds clean. Breaks the moment you're offline (because the next pull blows away the unpushed write). Tightly couples your storage schema to your DB schema, so every storage refactor becomes a migration.</li>
+<li><strong>Event-sourced log.</strong> Every change is an immutable event. State replays from the stream. Beautiful in theory. Wildly over-engineered for a single-player puzzle game. You'd be writing event-sourcing infrastructure for the rest of time and the only thing the user cares about is whether their trophy count is right on the new device.</li>
+</ul>
+<p>The "local + outbox + per-entity merge" middle path is the boring answer.</p>
+<h2 id="theoutboxlivesinasyncstoragetoo">The outbox lives in AsyncStorage too</h2>
+<p>The other piece is the outbox, the queue of changes waiting to be pushed.</p>
+<p>I considered an in-memory queue. A few hours of thinking about "what happens if the app is force-killed mid-flight" convinced me otherwise. The outbox needs to survive crashes. AsyncStorage is right there.</p>
+<pre><code class="ts language-ts">const OUTBOX_KEY = "@sudoku_flick_sync_outbox";
+
+async function enqueue(op: SyncOp) {
+  const raw = await AsyncStorage.getItem(OUTBOX_KEY);
+  const queue: SyncOp[] = raw ? JSON.parse(raw) : [];
+  queue.push(op);
+  await AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(queue));
+  triggerDrain();
+}
+</code></pre>
+<p><code>triggerDrain</code> is a debounced "go push the queue" function. It runs in the background and processes items in order. On success, the item is removed. On a retryable failure (network, 5xx), it stays in the queue and is retried later. On a terminal failure (an <code>INSERT</code> that violates a constraint that should never violate), it's logged loudly and discarded. That should never happen, and if it does, I'd rather know than retry forever.</p>
+<p>A nicety I added late: when the user signs in with email for the first time, the outbox is <em>flushed</em> before the merge happens. Otherwise you'd have pending pushes against the old anonymous user ID that suddenly belong to a different user.</p>
+<h2 id="conflictresolutionpertable">Conflict resolution, per table</h2>
+<p>Once you have multiple devices syncing, you need to answer: what wins?</p>
+<p>Sudoku Flick has six syncable entities, and each one needed its own answer:</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>Strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>profiles</code> (username, trophy slots)</td>
+<td>Last-write-wins on <code>updated_at</code>.</td>
+</tr>
+<tr>
+<td><code>user_settings</code> (a single JSONB blob)</td>
+<td>Last-write-wins on <code>updated_at</code>.</td>
+</tr>
+<tr>
+<td><code>game_records</code></td>
+<td>Insert-only. Once a record exists, it's immutable.</td>
+</tr>
+<tr>
+<td><code>achievements</code></td>
+<td>Idempotent. <code>INSERT ... ON CONFLICT DO NOTHING</code>.</td>
+</tr>
+<tr>
+<td><code>active_game</code></td>
+<td>Single-active-device lock. (See below.)</td>
+</tr>
+<tr>
+<td><code>daily_challenges</code></td>
+<td>Last-write-wins on <code>updated_at</code>, keyed per-day.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Most entities don't conflict.</strong> Achievements are sets: you either have a trophy or you don't, and unlocking it again is a no-op. Game records are append-only. Once you finished puzzle <code>game_1748432312</code>, that record exists forever, and the only "conflict" is "we both inserted it", which <code>INSERT ... ON CONFLICT (id) DO NOTHING</code> makes fine. Most of the sync surface is <em>trivially</em> idempotent.</p>
+<p><strong>The active game is the hard one.</strong> Mid-puzzle state (your current digits, your notes, your hint count, your elapsed time) <em>can</em> be edited from two devices, and last-write-wins would lose data. That one needs a real lock.</p>
+<h2 id="theactivegamelock">The active-game lock</h2>
+<p>The model I landed on: at any moment, exactly one device "owns" the active game.</p>
+<p>The <code>active_game</code> row has <code>device_id</code> and <code>last_heartbeat</code>. The owning device:</p>
+<ul>
+<li>writes <code>game_state</code> debounced 1s after each meaningful action,</li>
+<li>writes a heartbeat every 10s while the game is in the foreground,</li>
+<li>writes immediately on app background or unmount.</li>
+</ul>
+<p>If a different device opens the app and wants to resume:</p>
+<pre><code class="ts language-ts">const { data: active } = await supabase
+  .from("active_game")
+  .select("*")
+  .eq("user_id", userId)
+  .single();
+
+if (!active || active.device_id === myDeviceId) {
+  // I already own it, or no one does. Take/keep the slot.
+  return claim();
+}
+
+const stale = Date.now() - new Date(active.last_heartbeat).getTime() &gt; 30_000;
+if (stale) {
+  // Old session, probably crashed. Quiet takeover.
+  return claim();
+}
+
+// Someone else is actively playing. Show takeover modal.
+return promptTakeover(active);
+</code></pre>
+<p>The takeover modal is the user-facing piece: <em>"You're playing this game on your iPad. Continue here (your iPad will stop)?"</em> If you confirm, your device writes the row with its own <code>device_id</code>. The iPad's debounced push will fail to claim the lock on next attempt and the iPad will show a "this game is now active on another device" overlay.</p>
+<p>The thresholds:</p>
+<ul>
+<li><strong>1s debounce on push.</strong> Frequent enough that takeover sees fresh state; sparse enough that you're not battering Supabase on every digit.</li>
+<li><strong>10s idle keepalive.</strong> Even if you haven't touched the puzzle, the lock stays warm.</li>
+<li><strong>30s staleness threshold.</strong> Longer than two missed keepalives, short enough that the old device's crash doesn't strand the puzzle for hours.</li>
+</ul>
+<p>These numbers are stolen from how database connection pools handle stale connections, which is a problem people have been working on for forty years.</p>
+<h2 id="realtimeisobservationalonly">Realtime is observational only</h2>
+<p><a href="https://supabase.com/docs/guides/realtime">Supabase Realtime</a> is one of those features that's tempting to overuse.</p>
+<p>In Sudoku Flick, Realtime does exactly one job: <strong>notify the client that something on the server changed, so it can re-merge.</strong> It does not deliver state changes. It does not drive UI updates directly. It's a notification stream into the same merge handlers that the foreground pull uses.</p>
+<pre><code class="ts language-ts">supabase
+  .channel(`user:${userId}`)
+  .on("postgres_changes", { event: "*", schema: "public", table: "game_records", filter: `user_id=eq.${userId}` }, (payload) =&gt; {
+    SyncEngine.handleIncoming(payload);
+  })
+  .subscribe();
+</code></pre>
+<p><code>handleIncoming</code> is the same function the foreground pull calls when it fetches records. It writes to AsyncStorage, then emits the local change event the hook is listening for. The hook re-renders.</p>
+<p><strong>Echoes are absorbed naturally.</strong> When I push a record from device A, Realtime fires on device A <em>and</em> device B. On A, the merge is a no-op (the record is already there with that exact content). On B, the merge inserts the row. There's no "did this come from me?" filtering needed because the merge handler is genuinely idempotent.</p>
+<p>Because the merge handler is the same function regardless of where the data came from, the whole thing is testable. I have a single function I can throw any payload at, from any source, and verify the local state ends up right.</p>
+<h2 id="afewsharpedgesihit">A few sharp edges I hit</h2>
+<p><strong><code>updated_at</code> triggers are non-negotiable.</strong> Don't try to set <code>updated_at = now()</code> in the client. Clock skew exists. Phones lie. The database is the only thing whose clock matters for "what's the latest". A simple <a href="https://www.postgresql.org/docs/current/sql-createtrigger.html">Postgres trigger</a>:</p>
+<pre><code class="sql language-sql">create function touch_updated_at() returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+create trigger user_settings_touch
+before update on user_settings
+for each row execute function touch_updated_at();
+</code></pre>
+<p>Easy to write, easy to forget, ruinous to debug if missing.</p>
+<p><strong>The first sign-in is the riskiest moment.</strong> When an anonymous user attaches an email <em>and the email already has an existing account</em>, you have two sets of data: the anon's local data, and the existing email account's server data. The choice has to be the user's. I picked: surface a modal, <em>"This email already has progress. Replace local with your saved data, or keep this device's progress and discard the cloud copy?"</em> Either choice is destructive; the modal makes the destruction explicit.</p>
+<p>If the email is brand new (no existing account), the upgrade is silent and lossless: the anonymous user <em>becomes</em> the email user, the user_id doesn't change, every row stays exactly where it was.</p>
+<p><strong>Account deletion is harder than it sounds.</strong> "Delete my account" needs to: invalidate the session, cascade-delete every row in every table, delete the auth user, and confirm before doing it. I put it behind a two-step modal with a type-DELETE gate. The actual deletion runs in a <a href="https://supabase.com/docs/guides/functions">Supabase Edge Function</a> so the client can't get partway through and stop.</p>
+<p><strong>Anonymous users still take up auth.users rows.</strong> If you ship to a million people who launch the app once and never come back, you've made a million anon rows. Plan for a cleanup job (Supabase has a built-in policy for this; opt in). Or, if your free tier headroom is generous, just let them sit until you care.</p>
+<h2 id="whatthisisnot">What this is <em>not</em></h2>
+<ul>
+<li><strong>It's not multiplayer.</strong> There's no realtime co-solving. Two devices for the same user, yes; two users for the same puzzle, no.</li>
+<li><strong>It's not CRDT.</strong> The conflict resolution is per-entity strategies, not a general merge function. That's fine because the data is shaped to make conflict rare.</li>
+<li><strong>It's not zero-latency UI.</strong> Reads come from local; UI is instant. Writes are eventually pushed. If you require "what I see is exactly what the server thinks", this isn't that. (For a Sudoku app, this is fine. For your bank app, it isn't.)</li>
+</ul>
+<h2 id="whatiddodifferently">What I'd do differently</h2>
+<p>Things I'd plan for from day one if I were doing it again:</p>
+<ol>
+<li><strong>Treat the outbox as a first-class data structure from commit one.</strong> I retrofitted it after a week of "just queue it in memory". The retrofit was small but emotional.</li>
+<li><strong>Decide on <code>updated_at</code> conventions before writing the first table.</strong> I had three tables with three slightly different "what does updated_at mean?" definitions before I noticed. The triggers fixed it but the merge code briefly disagreed with itself.</li>
+</ol>
+<p>Other than that, the architecture has held up. The user opens the app, it does the offline thing, and somewhere in the background their progress is being faithfully mirrored across networks, devices and reinstalls, without ever having asked them to make an account.</p>
+<p>Happy syncing.</p>
+<h2 id="references">References</h2>
+<p><strong>Supabase</strong></p>
+<ul>
+<li><a href="https://supabase.com/docs/guides/auth/auth-anonymous">Anonymous sign-ins</a></li>
+<li><a href="https://supabase.com/docs/guides/database/postgres/row-level-security">Row Level Security</a></li>
+<li><a href="https://supabase.com/docs/guides/realtime">Realtime</a></li>
+<li><a href="https://supabase.com/docs/guides/functions">Edge Functions</a></li>
+</ul>
+<p><strong>React Native</strong></p>
+<ul>
+<li><a href="https://github.com/react-native-async-storage/async-storage">AsyncStorage (community)</a> (RN doesn't ship a built-in any more)</li>
+</ul>
+<p><strong>PostgreSQL</strong></p>
+<ul>
+<li><a href="https://www.postgresql.org/docs/current/sql-createtrigger.html"><code>CREATE TRIGGER</code></a></li>
+</ul>
+<p><strong>Related</strong></p>
+<ul>
+<li><a href="/saga-and-outbox">Saga and the outbox</a></li>
+<li><a href="/idempotency-keys-deduped-writes">Idempotency keys</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

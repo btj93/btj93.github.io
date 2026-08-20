@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>We are all participating in the world's largest public beta test</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2026-06-22">Mon, June 22, 2026</time>
+        <h1 class="mar-b-7">We are all participating in the world's largest public beta test</h1>
+    </header>
+    <h1 id="weareallparticipatingintheworldslargestpublicbetatest">We are all participating in the world's largest public beta test</h1>
+<p>A friend hit the thumbs-up button on a chatbot response over coffee last week. They did it without thinking. The answer was good, the button was right there, and the gesture was as light as liking a post on a social feed.</p>
+<p>What that click <em>is</em>, technically, is a data point in the largest behavioral training loop in the history of consumer software. Hundreds of millions of people, doing this every day, on every model from every provider, are shaping the behavior of the next generation of AI assistants. Most of them have no idea.</p>
+<p>I do not think this is a scandal. I think it's worth understanding clearly, because the more I look at it, the more I find it genuinely novel. And the framing of "beta tester" is more honest than "user" right now.</p>
+<h2 id="whatabetausedtobe">What a beta used to be</h2>
+<p>"Beta" is a software term with a specific shape:</p>
+<ul>
+<li>A piece of software, mostly working, sent to a limited cohort.</li>
+<li>The cohort uses it, finds bugs, sends them back.</li>
+<li>The maker fixes the bugs and ships a real version.</li>
+</ul>
+<p>Gmail famously stayed in beta for five years. Chrome ships a beta channel today. Game studios run weeks-long public beta phases. The contract is well understood: you get to use the unfinished thing, the maker gets to learn what's broken, and the artifact of the iteration is <em>code</em>, a piece of software a human deliberately writes after reading your report.</p>
+<p>LLM "betas" (and I'm going to call them that for the rest of this post) are different. They're vastly larger in scale, and the artifact of the iteration is fundamentally different in kind.</p>
+<h2 id="howanllmactuallygetsbetter">How an LLM actually gets better</h2>
+<p>A modern instruction-tuned LLM goes through roughly three stages.</p>
+<ol>
+<li><strong>Pretraining.</strong> A very large neural network learns to predict the next token across an enormous corpus of mostly-public text. This is the part everyone talks about. It produces a "base model", something with vast world knowledge but no particular bias toward being helpful in conversation.</li>
+<li><strong>Instruction tuning.</strong> A much smaller, more carefully curated dataset of "prompt → ideal response" pairs is used to fine-tune the base model into something that follows instructions.</li>
+<li><strong>Preference learning.</strong> The model is shown its own outputs, ranked by humans (or by other models trained on human rankings), and trained to prefer responses that humans prefer. This is the family of techniques that includes <a href="https://en.wikipedia.org/wiki/Reinforcement_learning_from_human_feedback">RLHF</a> and, more recently, simpler approaches like DPO.</li>
+</ol>
+<p>The pretraining data is more or less fixed. It's a snapshot of the public internet at some past date. The interesting iteration loop happens on top of it, in stages 2 and 3.</p>
+<p>That iteration loop is fed by user data.</p>
+<h2 id="whatyourdataactuallylookslikeintheloop">What "your data" actually looks like in the loop</h2>
+<p>When you have a conversation with an LLM, several things can flow back to the provider, depending on the product tier and the toggles you've set:</p>
+<ul>
+<li><strong>The conversation itself</strong>: your prompts, the model's responses.</li>
+<li><strong>Explicit ratings</strong>: the thumbs-up / thumbs-down you may or may not have clicked.</li>
+<li><strong>Implicit signals</strong>: did the conversation continue? Did you copy a piece of code out? Did you regenerate the response? Did you reword your question (suggesting the first answer missed)?</li>
+<li><strong>Edits to model output</strong>: when you take the model's draft and rewrite the second paragraph, that delta is a label.</li>
+</ul>
+<p>Aggregated across the user base, this is an absurd amount of behavioral information. Traditional product feedback (surveys, NPS scores, user interviews) is slow, expensive, and badly biased toward who actually fills out the survey. What an LLM provider gets instead is a billion-person, 24/7 UX research panel, with real tasks and real moments of "yes, that one".</p>
+<p>Some of that flows into the next round of preference learning. Some of it flows into the evaluation sets that determine which model gets shipped. Some of it just informs product decisions ("turns out half our usage is X, who knew").</p>
+<h2 id="thegenuinelynovelthing">The genuinely novel thing</h2>
+<p>Every previous beta was about iterating on code. The thing that improved between version 0.9 and version 1.0 was a thing humans deliberately edited.</p>
+<p>With LLMs, the artifact that improves between version 1.0 and version 1.1 is the <em>model weights</em>. The model weights are partly shaped by the aggregate behavior of the previous version's users. A correction I make today, by editing a draft or downvoting an answer, becomes (at population scale) a tiny pressure on what the next model will say to <em>somebody else</em> next year.</p>
+<p>This is not a thing software users have done before.</p>
+<p>It's not exactly authorship. The influence is statistical, anonymized, and indirect. It's not exactly tagging or labeling either, because most of the signal is behavioral rather than deliberate. I don't think we have a clean word for it yet. "Participant" works. "Beta tester" works. "Co-author by accumulation" might be closer.</p>
+<h2 id="whatyougiveandwhatyouget">What you give and what you get</h2>
+<p><strong>What you get:</strong> a tool that, by any reasonable measure, is improving faster than any previous category of software. The Claude or ChatGPT you used a year ago is dramatically worse than what you have now, and the change is concentrated in the post-training stages, the parts shaped by the feedback loop. The capabilities you depend on this year for free wouldn't exist in their current form without a year of usage data.</p>
+<p><strong>What you give:</strong> the shape of your problems. Sometimes the substance of your code, your writing, your work. The patterns of how you ask, what you get stuck on, what you correct, what you accept. You give it to a provider you've made a contract with, implicit if you didn't read the terms, explicit if you did.</p>
+<p>Some of it leaks into the model. Most of it informs the product. None of it is "free" in any meaningful sense, even when no money is changing hands.</p>
+<h2 id="whereoptingoutactuallylands">Where opting out actually lands</h2>
+<p>The defaults vary wildly:</p>
+<ul>
+<li><strong>API access</strong>: most providers, by default, do not train on API traffic. This is the tier developers and companies use when they don't want their inputs to inform anyone's model.</li>
+<li><strong>Enterprise / business tiers</strong>: same story, generally with contractual guarantees.</li>
+<li><strong>Consumer free tier</strong>: typically <em>does</em> train, usually with a toggle to opt out somewhere in settings. The toggle is rarely in the place you'd guess.</li>
+<li><strong>Consumer paid tier</strong>: varies a lot by provider. Some treat it like enterprise; some treat it like a slightly fancier consumer tier.</li>
+</ul>
+<p>The market is sorting itself into "use this product" vs "we use you" along this exact dimension. Companies that need to use LLMs in confidential contexts pay for the tier where the model is the product. Everyone else, by default, is a participant in the training loop, and pays in data instead of money.</p>
+<p>If you've never looked at your provider's data settings, look at them. For a lot of casual usage the bargain is genuinely fine, so the answer isn't necessarily to opt out. But you should know what you're agreeing to before you click thumbs-up.</p>
+<h2 id="somelessonsikeepcomingbackto">Some lessons I keep coming back to</h2>
+<p>From spending a year watching this play out as both a user and an engineer:</p>
+<ol>
+<li><strong>The norms aren't settled yet.</strong> What's acceptable practice in 2026 is going to look quaint, in one direction or the other, by 2030.</li>
+<li><strong>The defaults are not neutral.</strong> "Default to training" and "default to not training" describe two very different products. Both are reasonable defaults; both have implications.</li>
+<li><strong>The bargain is real.</strong> Nothing about this is free. The improvements that make the tool useful enough to depend on were paid for, in aggregate, by the users who came before you.</li>
+<li><strong>The "beta" framing is more honest than "product".</strong> A product is a finished thing. A beta is a thing that's becoming. Today's LLMs are unambiguously the latter.</li>
+<li><strong>Your thumbs-up is a vote.</strong> It's tiny, statistical and anonymized, but multiplied by however many people share your taste, it actually changes what the next model says to someone else. That's a strange amount of authorship to give away without thinking about it.</li>
+</ol>
+<p>I'm not arguing for or against participating. The fact is that I am participating. So is almost everyone reading this. I just want us to know we're doing it, and to take a beat occasionally before we click the button.</p>
+<p>We are early. This is the part of the era that will look weird in hindsight. The norms will arrive late. The defaults will shift.</p>
+<p>Until then, read the data settings. Make a choice. Don't sleepwalk through it.</p>
+<p>And when the model nails something, when it actually understood what you meant on the first try, when it caught a bug you missed, when it wrote a paragraph better than you'd have written it, give it the thumbs-up. You're voting on what the model will be like for the next person.</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://en.wikipedia.org/wiki/Reinforcement_learning_from_human_feedback">Reinforcement learning from human feedback (RLHF) — Wikipedia</a></li>
+<li><a href="https://arxiv.org/abs/2203.02155">InstructGPT paper — <em>Training language models to follow instructions with human feedback</em></a></li>
+<li><a href="https://arxiv.org/abs/2305.18290">Direct Preference Optimization (DPO) paper</a></li>
+<li><a href="https://arxiv.org/abs/2212.08073">Anthropic's <em>Constitutional AI</em> paper — RLAIF and self-critique</a></li>
+<li><a href="https://en.wikipedia.org/wiki/History_of_Gmail">Gmail beta — Wikipedia</a> (the original five-year beta)</li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

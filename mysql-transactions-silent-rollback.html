@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>MySQL transactions — same Go pattern, different ways to lose</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-06-29">Sun, June 29, 2025</time>
+        <h1 class="mar-b-7">MySQL transactions — same Go pattern, different ways to lose</h1>
+    </header>
+    <h1 id="mysqltransactionssamegopatterndifferentwaystolose">MySQL transactions — same Go pattern, different ways to lose</h1>
+<p>Two weeks ago I wrote about <a href="/go-transaction-manager-commit-errors">the Go transaction manager bug that ate my rollback</a>. The whole post was Postgres-flavored: deferred constraints, serialization failures at commit, the <code>ErrCommit</code> sentinel pattern.</p>
+<p>A few readers came back with a reasonable question: <em>does MySQL behave the same?</em></p>
+<p>The short answer is mostly yes at the Go level, and very much no in the failure modes that actually fire. There's also one MySQL-specific footgun the Postgres-centric story doesn't cover, and it's the one that has bitten me the hardest.</p>
+<p>This is the follow-up.</p>
+<h2 id="atthedatabasesqllevelthepatternisidentical">At the <code>database/sql</code> level, the pattern is identical</h2>
+<p>The fix from the previous post (wrap commit errors in a typed sentinel, don't bother rolling back after a failed commit) works unchanged on MySQL. The Go layer doesn't distinguish drivers:</p>
+<ul>
+<li><code>tx.Commit()</code> returning an error marks the <code>*sql.Tx</code> as done.</li>
+<li>A subsequent <code>tx.Rollback()</code> returns <code>sql.ErrTxDone</code>, useless cleanup, same as Postgres.</li>
+<li>The <code>ErrCommit</code> wrapper still lets the caller distinguish "the business logic rejected this" from "the commit failed and the world is ambiguous".</li>
+</ul>
+<p>So if you have the pattern from last post, you don't have to delete it for MySQL. Good.</p>
+<pre><code class="go language-go">if err := tx.Commit(); err != nil {
+    done = true
+    return fmt.Errorf("%w: %w", ErrCommit, err)
+}
+</code></pre>
+<p>This line works the same in both worlds.</p>
+<h2 id="thecausesofafailedcommitdiverge">The causes of a failed COMMIT diverge</h2>
+<p>Where the two databases actually differ is in <em>why</em> <code>Commit()</code> would fail. The Postgres list I gave was:</p>
+<blockquote>
+  <p>a serialization failure, a deferred constraint, or a network blip mid-flush</p>
+</blockquote>
+<p>In MySQL, two of those three barely apply.</p>
+<p><strong>Deferred constraints don't exist.</strong> <a href="https://dev.mysql.com/doc/refman/8.0/en/create-table-foreign-keys.html">InnoDB checks foreign-key and uniqueness constraints per-statement</a>. You'll never get the Postgres "I built up state for the whole transaction and then a constraint violation surfaced at COMMIT" surprise. If a constraint is going to fail, it fails when the offending <code>INSERT</code> or <code>UPDATE</code> runs, not at the end.</p>
+<p>This is actually a relief, one fewer thing to handle at commit time.</p>
+<p><strong>Serialization failures at COMMIT don't really happen.</strong> <a href="https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE">Postgres SERIALIZABLE is optimistic</a>: the database lets transactions proceed, tracks read/write sets, and surfaces conflicts at commit (<code>SQLSTATE 40001</code>, "could not serialize access"). <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-transaction-isolation-levels.html#isolevel_serializable">MySQL SERIALIZABLE is <em>lock-based</em></a>: it converts plain reads into <code>SELECT ... LOCK IN SHARE MODE</code>, and conflicts manifest as <strong>lock waits or deadlocks during statements</strong>, not as a COMMIT error.</p>
+<p>So the "I tried to commit and the DB refused because someone else's writes invalidated mine" failure mode that occasionally surfaces on Postgres doesn't surface on MySQL the same way. MySQL surfaces those conflicts earlier and more bluntly.</p>
+<p><strong>Network or server failures mid-commit.</strong> This is the one that's symmetric. A connection dropped between sending COMMIT and reading the OK packet leaves you in the same ambiguous state on both engines: the write may or may not have landed; the client cannot tell. The <code>ErrCommit</code> sentinel earns its keep here.</p>
+<p>So in practice, on MySQL, <code>tx.Commit()</code> errors are dominated by connection-level failures rather than DB-side correctness checks. Rare, but real, and the handling is the same.</p>
+<h2 id="themysqlfootgunthatisntinthepostgresplaybook">The MySQL footgun that <em>isn't</em> in the Postgres playbook</h2>
+<p>This one took me weeks to track down the first time.</p>
+<p><strong>MySQL silently rolls back the entire transaction on certain mid-statement errors, not just the failing statement.</strong></p>
+<p>The offenders:</p>
+<ul>
+<li><a href="https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html#error_er_lock_deadlock"><code>ER_LOCK_DEADLOCK</code></a> (error 1213): <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-deadlocks.html">InnoDB detected a deadlock</a> and unilaterally killed one of the transactions. <em>Yours</em>, in this story.</li>
+<li><a href="https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html#error_er_lock_wait_timeout"><code>ER_LOCK_WAIT_TIMEOUT</code></a> (error 1205): your transaction waited longer than <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_lock_wait_timeout"><code>innodb_lock_wait_timeout</code></a> for a lock. Depending on <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_rollback_on_timeout"><code>innodb_rollback_on_timeout</code></a>, this may roll back just the statement or <em>the whole transaction</em>. The default depends on the MySQL version, and you should not rely on either.</li>
+</ul>
+<p>When one of these fires, the transaction <em>is already gone server-side</em> before your Go code even sees the error. Your next statement on the same <code>tx</code> runs against… what, exactly? In the worst case, it runs in autocommit mode and writes data that was supposed to be part of the rolled-back transaction.</p>
+<p>The shape that bites:</p>
+<pre><code class="go language-go">err := tx.Do(ctx, func(ctx context.Context) error {
+    if err := repo.UpdateBalance(ctx, src, -100); err != nil {
+        return err // ← deadlock; server has rolled back the tx already
+    }
+    return repo.UpdateBalance(ctx, dst, +100) // ← runs in a fresh implicit transaction
+})
+</code></pre>
+<p>If <code>UpdateBalance</code> on <code>src</code> deadlocked and the error path naively returned, you'd be fine, because the rollback in the <code>Do</code> deferral is a no-op against an already-dead transaction. But if your <code>fn</code> swallowed the error and continued, you'd write to <code>dst</code> <em>outside</em> the original atomic boundary. Money would move one way and not the other.</p>
+<p>(I have not personally done this with money. I have done it with something only slightly less embarrassing.)</p>
+<h2 id="thefixdetectandretrythewholetransaction">The fix: detect and retry the <em>whole</em> transaction</h2>
+<p>The pattern on MySQL has to include a retry, and the retry has to be at the transaction boundary rather than the statement.</p>
+<p>A starter implementation:</p>
+<pre><code class="go language-go">import (
+    "errors"
+    "time"
+
+    mysqldriver "github.com/go-sql-driver/mysql"
+)
+
+func isMySQLRetriable(err error) bool {
+    var mErr *mysqldriver.MySQLError
+    if !errors.As(err, &amp;mErr) {
+        return false
+    }
+    switch mErr.Number {
+    case 1213, // ER_LOCK_DEADLOCK
+         1205: // ER_LOCK_WAIT_TIMEOUT
+        return true
+    }
+    return false
+}
+
+func (m *txManager) DoWithRetry(
+    ctx context.Context,
+    maxAttempts int,
+    fn func(ctx context.Context) error,
+) error {
+    var lastErr error
+    for attempt := 1; attempt &lt;= maxAttempts; attempt++ {
+        lastErr = m.Do(ctx, fn)
+        if lastErr == nil {
+            return nil
+        }
+        if !isMySQLRetriable(lastErr) {
+            return lastErr
+        }
+        // Exponential backoff with a small jitter cap.
+        sleep := time.Duration(attempt) * 10 * time.Millisecond
+        select {
+        case &lt;-time.After(sleep):
+        case &lt;-ctx.Done():
+            return ctx.Err()
+        }
+    }
+    return lastErr
+}
+</code></pre>
+<p><strong>The retry happens at the <code>Do</code> boundary, not inside <code>fn</code>.</strong> A fresh transaction means a fresh <code>*sql.Tx</code>, a fresh connection from the pool, and <code>fn</code> runs cleanly from the start. Retrying <em>inside</em> <code>fn</code> against the same <code>tx</code> won't work, because the tx is dead.</p>
+<p><strong><code>fn</code> must be idempotent across retries.</strong> This is the part that catches people. If <code>fn</code> writes a row whose ID is allocated externally (a UUID generated in Go before the call), retrying produces the same row twice, but the first write was rolled back, so the second write succeeds, and you're fine. If <code>fn</code> has an external side effect like "send an email" or "call an external API" embedded <em>inside</em> the transaction, retrying duplicates that side effect.</p>
+<p>Rule of thumb I follow: <strong>side effects that aren't reversible don't go inside a <code>DoWithRetry</code>.</strong> They go after a successful commit, behind something idempotent. The <a href="/saga-and-outbox">outbox pattern from the saga post</a>, where you write the side effect as a row inside the transaction and publish it from a relay outside, is the cleanest way to keep <code>fn</code> retriable.</p>
+<h2 id="whatssymmetricbetweenpostgresandmysql">What's symmetric between Postgres and MySQL</h2>
+<p>For completeness, the retry pattern isn't MySQL-only. Postgres has its own retriable codes (full table in the <a href="https://www.postgresql.org/docs/current/errcodes-appendix.html">Postgres error codes appendix</a>):</p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>40001</code></td>
+<td>serialization_failure (true OCC conflict)</td>
+</tr>
+<tr>
+<td><code>40P01</code></td>
+<td>deadlock_detected</td>
+</tr>
+</tbody>
+</table>
+<p>Postgres deadlocks are also auto-rolled-back. The retry-the-whole-transaction principle is identical. The difference is just the menu of error codes you look for.</p>
+<p>A generic <code>isRetriable</code> that handles both can be as simple as:</p>
+<pre><code class="go language-go">func isRetriable(err error) bool {
+    if isMySQLRetriable(err) {
+        return true
+    }
+    if isPostgresRetriable(err) { // pgconn.PgError on SQLSTATEs 40001/40P01
+        return true
+    }
+    return false
+}
+</code></pre>
+<p>And then your <code>DoWithRetry</code> is the same function on both engines.</p>
+<h2 id="atangentialmysqldurabilitynote">A tangential MySQL durability note</h2>
+<p>This one surprised me the first time. MySQL has <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_flush_log_at_trx_commit"><code>innodb_flush_log_at_trx_commit</code></a>:</p>
+<ul>
+<li><code>=1</code> (default): fsync per commit. Strong durability, slower.</li>
+<li><code>=2</code>: write to OS cache per commit, fsync once per second. A <code>Commit()</code> can return "success" but lose the transaction on a power failure within that second.</li>
+<li><code>=0</code>: write and fsync once per second. Even more relaxed.</li>
+</ul>
+<p>Postgres has a parallel knob (<a href="https://www.postgresql.org/docs/current/runtime-config-wal.html#GUC-SYNCHRONOUS-COMMIT"><code>synchronous_commit</code></a>), but in MySQL it's a frequent performance tuning target for write-heavy workloads, and it changes the meaning of "the COMMIT succeeded". If your app reports an order as confirmed after <code>tx.Commit()</code> returns nil, and the DB is running at <code>=2</code>, that confirmation can disappear on a server crash. Not a bug you can fix in Go. Worth knowing exists.</p>
+<h2 id="lessonsthatcarryover">Lessons that carry over</h2>
+<p>A handful of additions to the original post's list, MySQL-specific:</p>
+<ol>
+<li><strong>A failed statement can take the whole transaction with it.</strong> On MySQL, deadlocks and lock-wait-timeouts roll back the <em>entire transaction</em> server-side. Treat them as transaction-level errors.</li>
+<li><strong>Retry at the transaction boundary, not the statement.</strong> Always with a fresh <code>Do</code>.</li>
+<li><strong>Make <code>fn</code> idempotent or it doesn't get retried.</strong> This forces side effects out of the transaction and into the outbox.</li>
+<li><strong>Detect the error codes explicitly.</strong> Don't retry on every error, only the ones you know are retriable. Anything else gets returned unmodified.</li>
+<li><strong>Know your <code>innodb_flush_log_at_trx_commit</code>.</strong> "COMMIT succeeded" means something slightly different at each setting.</li>
+</ol>
+<p>The shape of the fix from the original post is unchanged: <code>ErrCommit</code>, no useless rollback after commit, loud-but-not-paging on non-trivial rollback errors. What changes is the retry layer you build around it. On Postgres you can sometimes get away without one (serialization failures are rare for most workloads). On MySQL, anything with realistic contention will deadlock occasionally, and the retry layer is part of the contract.</p>
+<p>Same pattern. Different failure modes. Same lesson: name the thing, classify the error, and don't pretend the database is just a key-value store with extra steps.</p>
+<p>Happy committing, on either engine.</p>
+<h2 id="references">References</h2>
+<p><strong>Go</strong></p>
+<ul>
+<li><code>database/sql</code> package: <a href="https://pkg.go.dev/database/sql"><code>pkg.go.dev/database/sql</code></a></li>
+<li><code>sql.ErrTxDone</code>: <a href="https://pkg.go.dev/database/sql#pkg-variables"><code>pkg.go.dev/database/sql#pkg-variables</code></a></li>
+<li><code>go-sql-driver/mysql</code> <code>MySQLError</code> type: <a href="https://pkg.go.dev/github.com/go-sql-driver/mysql#MySQLError"><code>pkg.go.dev/github.com/go-sql-driver/mysql#MySQLError</code></a></li>
+<li><code>pgx</code> / <code>pgconn</code> <code>PgError</code> type: <a href="https://pkg.go.dev/github.com/jackc/pgx/v5/pgconn#PgError"><code>pkg.go.dev/github.com/jackc/pgx/v5/pgconn#PgError</code></a></li>
+</ul>
+<p><strong>MySQL / InnoDB</strong></p>
+<ul>
+<li>InnoDB deadlocks overview: <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-deadlocks.html"><code>dev.mysql.com/doc/refman/8.0/en/innodb-deadlocks.html</code></a></li>
+<li>Server error reference (1205 / 1213): <a href="https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html"><code>dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html</code></a></li>
+<li><code>innodb_lock_wait_timeout</code>: <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_lock_wait_timeout">InnoDB parameters</a></li>
+<li><code>innodb_rollback_on_timeout</code>: <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_rollback_on_timeout">InnoDB parameters</a></li>
+<li><code>innodb_flush_log_at_trx_commit</code>: <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_flush_log_at_trx_commit">InnoDB parameters</a></li>
+<li>InnoDB transaction isolation levels: <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-transaction-isolation-levels.html"><code>dev.mysql.com/doc/refman/8.0/en/innodb-transaction-isolation-levels.html</code></a></li>
+</ul>
+<p><strong>PostgreSQL</strong></p>
+<ul>
+<li>Transaction isolation (incl. SERIALIZABLE / SSI): <a href="https://www.postgresql.org/docs/current/transaction-iso.html"><code>postgresql.org/docs/current/transaction-iso.html</code></a></li>
+<li>Error codes appendix (SQLSTATEs incl. 40001, 40P01): <a href="https://www.postgresql.org/docs/current/errcodes-appendix.html"><code>postgresql.org/docs/current/errcodes-appendix.html</code></a></li>
+<li><code>synchronous_commit</code> WAL setting: <a href="https://www.postgresql.org/docs/current/runtime-config-wal.html#GUC-SYNCHRONOUS-COMMIT"><code>postgresql.org/docs/current/runtime-config-wal.html</code></a></li>
+<li>Deferred constraints (<code>SET CONSTRAINTS</code>): <a href="https://www.postgresql.org/docs/current/sql-set-constraints.html"><code>postgresql.org/docs/current/sql-set-constraints.html</code></a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

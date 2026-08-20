@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Typed HTTP errors in Go — a pattern I keep reaching for</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-08-23">Sat, August 23, 2025</time>
+        <h1 class="mar-b-7">Typed HTTP errors in Go — a pattern I keep reaching for</h1>
+    </header>
+    <h1 id="typedhttperrorsingoapatternikeepreachingfor">Typed HTTP errors in Go — a pattern I keep reaching for</h1>
+<p>Every Go service I've ever worked on grows the same chunk of code over time. It always starts as a one-liner:</p>
+<pre><code class="go language-go">return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+</code></pre>
+<p>Then someone needs to attach a machine-readable error code. Then someone wants metadata. Then someone realizes wrapped errors leak internal detail in the response body. Then a frontend dev opens a ticket because every endpoint returns errors in a slightly different shape.</p>
+<p>I keep ending up with the same pattern. Time to write it down before I have to invent it from scratch again.</p>
+<h2 id="whatiwantfromanhttperror">What I want from an HTTP error</h2>
+<p>When I introduce errors at the boundary of a Go service, here's the contract I keep wanting:</p>
+<ol>
+<li><strong>A single shape.</strong> Frontends should be able to decode every error response with the same struct.</li>
+<li><strong>A machine-readable code.</strong> The HTTP status alone isn't enough. <code>400 Bad Request</code> could be twenty different things, so the body needs to name the thing.</li>
+<li><strong>A safe message.</strong> The user-facing detail should <em>never</em> leak a wrapped error. If something says <code>pq: duplicate key value violates unique constraint "users_email_key"</code>, that's an internal detail. The response should say "email already taken".</li>
+<li><strong>Optional metadata.</strong> A <code>meta</code> object that endpoints can fill with structured context: a field name, a retry-after, a request ID, whatever.</li>
+<li><strong>No global mutation.</strong> Building an error should be a pure function on the input. No <code>WithRequestID()</code> that secretly stuffs things into a package-level map.</li>
+</ol>
+<h2 id="theresponseshape">The response shape</h2>
+<p>I always end up with something close to this:</p>
+<pre><code class="json language-json">{
+  "error": {
+    "code": "InvalidParameter",
+    "detail": "email is required",
+    "meta": {
+      "field": "email",
+      "request_id": "01HXC9P4ABCDE..."
+    }
+  }
+}
+</code></pre>
+<p><code>code</code> is a short PascalCase enum value. <code>detail</code> is a sentence I'd be okay showing to the user. <code>meta</code> is an open-ended object, but every field in it is <em>added on purpose</em>. No "throw the wrapped error in there and let the frontend figure it out".</p>
+<h2 id="thegoside">The Go side</h2>
+<p>The interface I want to write at a handler looks like this:</p>
+<pre><code class="go language-go">if email == "" {
+    return httperror.UnprocessableEntity(
+        ErrCodeInvalidParameter,
+        ErrEmailRequired,
+    ).WithField("field", "email")
+}
+</code></pre>
+<p>To make that work, I need a builder type that:</p>
+<ul>
+<li>carries an HTTP status,</li>
+<li>carries a code,</li>
+<li>wraps an underlying <code>error</code>,</li>
+<li>and exposes immutable <code>WithField</code> / <code>WithFields</code> chaining.</li>
+</ul>
+<p>A first cut:</p>
+<pre><code class="go language-go">package httperror
+
+import (
+    "encoding/json"
+    "errors"
+    "net/http"
+)
+
+type ErrCode string
+
+type Error struct {
+    Status  int
+    Code    ErrCode
+    Err     error            // wrapped, surfaced only via errors.Is/As
+    Meta    map[string]any   // user-facing metadata only
+}
+
+func (e *Error) Error() string {
+    return string(e.Code) + ": " + e.Err.Error()
+}
+
+func (e *Error) Unwrap() error { return e.Err }
+
+// MarshalJSON enforces the safe response shape.
+// Notably, the wrapped error's full chain is NOT exposed —
+// only its top-level message.
+func (e *Error) MarshalJSON() ([]byte, error) {
+    return json.Marshal(struct {
+        Error struct {
+            Code   ErrCode        `json:"code"`
+            Detail string         `json:"detail"`
+            Meta   map[string]any `json:"meta,omitempty"`
+        } `json:"error"`
+    }{
+        Error: struct {
+            Code   ErrCode        `json:"code"`
+            Detail string         `json:"detail"`
+            Meta   map[string]any `json:"meta,omitempty"`
+        }{
+            Code:   e.Code,
+            Detail: e.Err.Error(), // top-level only
+            Meta:   e.Meta,
+        },
+    })
+}
+</code></pre>
+<p>The <code>Detail</code> field deliberately uses <code>e.Err.Error()</code> and not the <em>full</em> chain via <code>%+v</code>. Wrapped causes stay reachable on the server side via <a href="https://pkg.go.dev/errors#Unwrap"><code>errors.Unwrap</code></a>, but they don't leak to the client.</p>
+<h2 id="thechainableconstructors">The chainable constructors</h2>
+<p>Status-code constructors are nice because they read like English:</p>
+<pre><code class="go language-go">func BadRequest(code ErrCode, err error) *Error {
+    return &amp;Error{Status: http.StatusBadRequest, Code: code, Err: err}
+}
+
+func UnprocessableEntity(code ErrCode, err error) *Error {
+    return &amp;Error{Status: http.StatusUnprocessableEntity, Code: code, Err: err}
+}
+
+func InternalServerError(code ErrCode, err error) *Error {
+    return &amp;Error{Status: http.StatusInternalServerError, Code: code, Err: err}
+}
+</code></pre>
+<p><code>WithField</code> should return a new error rather than mutating:</p>
+<pre><code class="go language-go">func (e *Error) WithField(key string, value any) *Error {
+    cloned := *e
+    if cloned.Meta == nil {
+        cloned.Meta = map[string]any{}
+    } else {
+        cloned.Meta = cloneMap(cloned.Meta)
+    }
+    cloned.Meta[key] = value
+    return &amp;cloned
+}
+</code></pre>
+<p>Why immutable? Because mutating in place surprises you the moment you reuse a base error:</p>
+<pre><code class="go language-go">var ErrInvalidParam = httperror.BadRequest(ErrCodeInvalidParam, errors.New("invalid"))
+
+func handler1(...) error {
+    return ErrInvalidParam.WithField("field", "email") // mutates ErrInvalidParam!
+}
+
+func handler2(...) error {
+    return ErrInvalidParam.WithField("field", "age") // sees previous field
+}
+</code></pre>
+<p>I've shipped that bug. Once was enough.</p>
+<h2 id="wiringitintoechooranyframework">Wiring it into Echo (or any framework)</h2>
+<p>The framework-specific bit is dead simple. For <a href="https://echo.labstack.com/">Echo</a>, a single middleware that knows about your error type:</p>
+<pre><code class="go language-go">func ErrorHandler(err error, c echo.Context) {
+    var httpErr *httperror.Error
+    if errors.As(err, &amp;httpErr) {
+        _ = c.JSON(httpErr.Status, httpErr)
+        return
+    }
+    // unknown error: fall back to opaque 500
+    _ = c.JSON(http.StatusInternalServerError, httperror.InternalServerError(
+        "InternalServerError",
+        errors.New("internal server error"),
+    ))
+}
+</code></pre>
+<p>The framework integration is <em>separate</em> from the core type. The core <code>Error</code> doesn't import <code>echo</code> or <code>gin</code> or <code>chi</code>. That way you can swap frameworks without rewriting your error vocabulary.</p>
+<p>A pattern I've seen go wrong is when the error library directly returns <code>echo.HTTPError</code>, coupling the entire codebase to one framework. Don't. Keep the error type pure data; let an adapter translate.</p>
+<h2 id="whycontextinjectionistemptinganddangerous">Why context-injection is tempting and dangerous</h2>
+<p>A feature I keep flirting with is auto-injecting context values:</p>
+<pre><code class="go language-go">err := httperror.WithContext(ctx, []ContextKey{RequestID{}}).
+    BadRequest(ErrCodeInvalidParam, ErrInvalidInput)
+</code></pre>
+<p>It's tempting because every endpoint wants the request ID in the response. But two warnings from experience:</p>
+<ol>
+<li><strong>The context value is snapshotted at construction time.</strong> If you build the error early and return it late, and the request ID changed somewhere in between, you'll be very confused. Solve this with documentation, not cleverness.</li>
+<li><strong>Don't auto-include anything that might be PII.</strong> Don't have a "well let's just dump the entire ctx" mode. The whole point of typed errors is that the response body is intentional.</li>
+</ol>
+<p>If I include <code>WithContext</code>, I make the allowed keys <em>explicit</em>: each key implements an interface like <code>ContextKey { Key() string }</code>. You can't accidentally include something you didn't authorize.</p>
+<h2 id="lessonsafterseveraliterations">Lessons after several iterations</h2>
+<p>A few things I keep coming back to:</p>
+<ul>
+<li><strong>Define the response schema first.</strong> The Go API should bend to fit the JSON contract, not the other way around.</li>
+<li><strong>Wrap, don't replace, the underlying error.</strong> Use <code>Unwrap</code> so <code>errors.Is</code>/<code>errors.As</code> keep working.</li>
+<li><strong>Don't expose the unwrap chain to the client.</strong> It's a debugging aid, not a public API.</li>
+<li><strong>Make the builder immutable.</strong> Shared base errors are too convenient to give up; chained mutation will bite.</li>
+<li><strong>Keep framework integration in a sub-package.</strong> The error type should be pure data.</li>
+<li><strong>Resist the temptation to add a "details" string field that's "just for the user".</strong> You'll have one place that formats and one that doesn't, and you'll never be sure which.</li>
+</ul>
+<p>The whole thing is maybe 200 lines of Go, but it's 200 lines I end up writing on every greenfield service. Better to write them once, on purpose, than to grow them by accretion.</p>
+<p>Happy erroring!</p>
+<h2 id="references">References</h2>
+<ul>
+<li>Go <code>errors</code> package: <a href="https://pkg.go.dev/errors"><code>pkg.go.dev/errors</code></a> (covers <code>Is</code>, <code>As</code>, <code>Unwrap</code>, <code>Join</code>)</li>
+<li><code>fmt.Errorf</code> and the <code>%w</code> verb: <a href="https://pkg.go.dev/fmt#Errorf"><code>pkg.go.dev/fmt#Errorf</code></a></li>
+<li>Go <code>encoding/json</code> package: <a href="https://pkg.go.dev/encoding/json"><code>pkg.go.dev/encoding/json</code></a> (custom <code>MarshalJSON</code>)</li>
+<li>Go <code>net/http</code> status code constants: <a href="https://pkg.go.dev/net/http"><code>pkg.go.dev/net/http</code></a></li>
+<li>Echo web framework: <a href="https://echo.labstack.com/"><code>echo.labstack.com</code></a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

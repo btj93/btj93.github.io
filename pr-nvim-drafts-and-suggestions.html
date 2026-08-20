@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>pr.nvim, part 2 — drafts, suggestions, and diagnostics</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-10-26">Sun, October 26, 2025</time>
+        <h1 class="mar-b-7">pr.nvim, part 2 — drafts, suggestions, and diagnostics</h1>
+    </header>
+    <h1 id="prnvimpart2draftssuggestionsanddiagnostics">pr.nvim, part 2 — drafts, suggestions, and diagnostics</h1>
+<p><a href="/why-i-built-pr-nvim">Last month</a> I wrote about why I started building pr.nvim and the early shape of it: pickers, provider abstraction, inline diagnostics. The plugin could <em>read</em> a PR. This month it learned to <em>review</em> one.</p>
+<p>What shipped in October:</p>
+<ul>
+<li>Persistent drafts.</li>
+<li>Suggestion blocks, rendered as readable diffs and applyable in place.</li>
+<li>Review submission with batched pending comments.</li>
+<li>Status counters in the winbar.</li>
+<li><code>:PRQuickfix</code> and proper <code>vim.diagnostic</code> integration.</li>
+</ul>
+<p>This post is about the design decisions behind those, because every one of them had at least one rabbit hole I had to climb out of.</p>
+<div class="github-card" data-github="btj93/pr.nvim" data-width="400" data-height="" data-theme="default"></div>
+<h2 id="drafts">Drafts</h2>
+<p>A "draft" is a comment that's been typed but not posted. Sounds simple. The non-trivial part is that I need to <em>trust</em> the plugin with the draft.</p>
+<p>If I type a paragraph, accidentally close the popup, and the paragraph is gone, I will go back to the browser. That's the bar. Drafts have to outlive:</p>
+<ul>
+<li>closing the popup window,</li>
+<li>closing the buffer,</li>
+<li>closing Neovim entirely,</li>
+<li>a Neovim crash.</li>
+</ul>
+<p>The shape that satisfied me:</p>
+<pre><code>~/.local/share/nvim/pr.nvim/drafts/
+└── &lt;provider&gt;/
+    └── &lt;repo&gt;/
+        └── &lt;pr_id&gt;/
+            └── &lt;thread_id_or_position_hash&gt;.md
+</code></pre>
+<p>One file per draft. Markdown body. The path tells you exactly which thread it belongs to. If a draft becomes a posted comment, the file is deleted. If you close everything and open it again tomorrow, the popup pulls the draft back from disk.</p>
+<p>Two decisions:</p>
+<ol>
+<li><strong>The draft file is the source of truth, not a Neovim buffer variable.</strong> A Neovim buffer can disappear; a file in <code>~/.local/share</code> does not.</li>
+<li><strong>Editing happens in a real buffer with <code>filetype=markdown</code>.</strong> That gives me all my normal markdown editing keybindings, completion, treesitter highlighting, and so on, for free.</li>
+</ol>
+<p>For the second one, I added <code>@user</code> and <code>#issue</code> omnifunc completion, because review comments are at least 30% mentions and issue references.</p>
+<pre><code class="lua language-lua">-- in the draft buffer
+vim.bo.omnifunc = "v:lua.require'pr.completion'.complete"
+</code></pre>
+<p>The completion function shells out to <code>gh api search/issues</code> or the equivalent. It's slow on the first invocation per session (a few hundred ms) and instant from then on, because the results are cached per buffer.</p>
+<h3 id="conflicthandlingonsave">Conflict handling on save</h3>
+<p>What if you opened the same thread in two Neovim instances, and edited the draft in both?</p>
+<p>The way pr.nvim handles it now:</p>
+<ul>
+<li>When the popup opens, it reads the draft file and records its <code>mtime</code> and content hash.</li>
+<li>When the popup saves, it re-reads the file before writing and compares hashes.</li>
+<li>If the file changed under us, show a buffer-local message: <em>"Draft was modified externally. Run <code>:PRDraftMerge</code> to view both."</em></li>
+</ul>
+<p>It's cruder than a CRDT, but in practice the user opens both instances, sees the warning, picks one, copy-pastes the other in if they want, and moves on.</p>
+<h2 id="suggestionblocksrenderasadiffapplyinplace">Suggestion blocks: render as a diff, apply in place</h2>
+<p><a href="https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/incorporating-feedback-in-your-pull-request">GitHub-style suggestion blocks</a> look like this in a comment body:</p>
+<pre><code>The variable name should be more descriptive:
+
+```suggestion
+const completedTaskCount = tasks.filter(t =&gt; t.done).length;
+```
+</code></pre>
+<p>In the browser, that renders as a colored diff with an "Apply suggestion" button. The author of the PR clicks it; the suggestion lands as a commit on the branch.</p>
+<p>I wanted the same workflow in pr.nvim. Two pieces:</p>
+<ol>
+<li><strong>Render the suggestion as a diff</strong> rather than a raw fenced code block, when the popup displays the comment.</li>
+<li><strong>Make it applyable</strong> with a single keymap, by writing the suggested content back to the original file.</li>
+</ol>
+<p>For rendering, I extract the suggestion from the comment body, look up the <em>original</em> lines from the diff (so I can show a real diff, not just the replacement), and render side-by-side using treesitter ranges within the popup's markdown buffer.</p>
+<p>For applying:</p>
+<pre><code class="lua language-lua">-- pseudo
+local original_range = thread.diff_position
+local replacement = suggestion.body
+vim.api.nvim_buf_set_lines(
+  bufnr,
+  original_range.start_line - 1,
+  original_range.end_line,
+  false,
+  vim.split(replacement, "\n", { plain = true })
+)
+</code></pre>
+<p>It's deliberately a <em>local</em> edit. No commits, no pushes. The user reviews the change in their working tree like any other diff, then decides what to do with it. If they want a commit, they make one. If they want to amend, they amend.</p>
+<p>This took one cycle of getting it wrong before I landed on it. My first version auto-committed the suggestion. People (correctly) hated this.</p>
+<h3 id="authoringsuggestionsfromvisualmode">Authoring suggestions from visual mode</h3>
+<p>The other half is <em>creating</em> a suggestion. It's a small affordance that has paid off:</p>
+<pre><code class="lua language-lua">vim.keymap.set("v", "&lt;leader&gt;ps", function()
+  require("pr").suggest()
+end, { desc = "Author suggestion from visual selection" })
+</code></pre>
+<p>You select a block in visual mode, hit the keymap, and the plugin opens a draft popup pre-populated with:</p>
+<pre><code>```suggestion
+&lt;the lines you selected&gt;
+```
+</code></pre>
+<p>You edit the lines, save, and pr.nvim posts it as a review comment on those lines. The thing that took the longest here was figuring out what "those lines" map to in the <em>PR's</em> diff coordinates, because the buffer line numbers are local to the working tree.</p>
+<p>The trick: when you check out a PR via pr.nvim's picker, the plugin remembers the head SHA and the diff hunks. Local edits invalidate the mapping, but as long as you suggest against unmodified lines, the position is unambiguous.</p>
+<h2 id="reviewsubmission">Review submission</h2>
+<p>GitHub (and friends) have two modes for <a href="https://docs.github.com/en/rest/pulls/reviews">posting review comments</a>:</p>
+<ul>
+<li><strong>Single comment</strong>: fires off immediately, no review context.</li>
+<li><strong>Pending comment inside a review</strong>: staged, attached to a review, posted as a group when you "submit" the review with <code>Approve</code> / <code>Request changes</code> / <code>Comment</code>.</li>
+</ul>
+<p>For anything more than a one-line "looks good" I want the latter, because it batches the email notifications, communicates intent (approve/RC/comment), and lets me move comments around before they go out.</p>
+<p>In pr.nvim that surfaces as:</p>
+<pre><code>:PRReview start
+   - opens a review session for this PR
+   - any subsequent draft you post becomes a pending comment
+
+:PRReview submit
+   - prompts: approve / request changes / comment + optional body
+   - posts the review with all pending comments attached
+</code></pre>
+<p>The internal state machine has two states: <em>no active review</em> and <em>active review for PR X</em>. Drafts know which state to post into. Status counter (more below) shows how many pending comments are stacked, so you remember to submit.</p>
+<h2 id="statuscounterswinbar">Status counters + winbar</h2>
+<p>Once review submission existed, I needed a way to know "am I currently in a review, and how many pending comments do I have?".</p>
+<p>A status counter in the winbar:</p>
+<pre><code>my-pr-branch │ pr.nvim: ✓ active review, 4 pending │ ...
+</code></pre>
+<p>It updates whenever a draft moves from "drafting" to "pending", or a pending comment is posted, or a review is submitted. The whole thing is a single autocmd on a custom user event that pr.nvim fires when state changes.</p>
+<pre><code class="lua language-lua">vim.api.nvim_create_autocmd("User", {
+  pattern = "PRStateChanged",
+  callback = function() update_winbar() end,
+})
+</code></pre>
+<p>Fire a <code>User</code> event, let consumers re-render. That keeps the winbar decoupled, and statusline plugins can hook the same event without any pr.nvim-specific glue.</p>
+<h2 id="vimdiagnosticintegrationproperlythistime"><code>vim.diagnostic</code> integration, properly this time</h2>
+<p>Last month's post described publishing threads as diagnostics in a custom namespace. That was the right call but the integration was incomplete: <code>:PRQuickfix</code> was a custom command that mimicked the quickfix list, and severity tuning was a hardcoded mapping.</p>
+<p>The October pass aligned things properly with <a href="https://neovim.io/doc/user/diagnostic.html"><code>vim.diagnostic</code></a>:</p>
+<pre><code class="lua language-lua">opts = {
+  diagnostics = {
+    severity_active   = vim.diagnostic.severity.WARN,
+    severity_outdated = vim.diagnostic.severity.HINT,
+    severity_resolved = vim.diagnostic.severity.INFO,
+  },
+}
+</code></pre>
+<p><code>:PRQuickfix</code> became one line:</p>
+<pre><code class="lua language-lua">vim.api.nvim_create_user_command("PRQuickfix", function()
+  vim.diagnostic.setqflist({ namespace = require("pr").ns() })
+end, {})
+</code></pre>
+<p>…and <code>]d</code> / <code>[d</code> jumping through threads now works exactly like LSP diagnostic jumping, including when filtered by severity (e.g. only active threads).</p>
+<h2 id="whatsnext">What's next</h2>
+<p>The plugin is now usable enough that I'm starting to use it for non-trivial PRs at work. The next stretch of work is:</p>
+<ul>
+<li><strong>Better thread navigation across files.</strong> Walking thread-by-thread, not just diagnostic-by-diagnostic.</li>
+<li><strong>CI checks integration.</strong> Show the failing job and let me jump to the log.</li>
+<li><strong>Permalink yanking</strong> for sharing a specific commented line.</li>
+</ul>
+<p>If there's a part 3, that's probably what it covers. For now the goal of "don't switch tabs to read a comment" has stretched to "don't switch tabs to <em>do a whole review</em>".</p>
+<p>Closer to the goal every month.</p>
+<p>Happy reviewing!</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="/why-i-built-pr-nvim">Part 1: Why I built pr.nvim</a></li>
+<li><a href="https://neovim.io/doc/user/diagnostic.html"><code>vim.diagnostic</code></a>: including <code>setqflist</code> and severity levels</li>
+<li><a href="https://neovim.io/doc/user/autocmd.html#User">Neovim user-events / autocmds</a></li>
+<li><a href="https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/incorporating-feedback-in-your-pull-request">GitHub: incorporating feedback / suggestion blocks</a></li>
+<li><a href="https://docs.github.com/en/rest/pulls/reviews">GitHub REST API — pull request reviews</a></li>
+<li><a href="https://github.com/MunifTanjim/nui.nvim">nui.nvim</a>: popup layouts</li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>The Powerful Substitute Command in Neovim/Vim</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-05-03">Sat, May 03, 2025</time>
+        <h1 class="mar-b-7">The Powerful Substitute Command in Neovim/Vim</h1>
+    </header>
+    <h1 id="thepowerfulsubstitutecommandinneovimvim">The Powerful Substitute Command in Neovim/Vim</h1>
+<p>The substitute command is how you search and replace text in Neovim and Vim. Here is the syntax and the options it takes.</p>
+<h2 id="basicsyntax">Basic Syntax</h2>
+<p>The basic syntax of the substitute command is as follows:</p>
+<pre><code>:s/pattern/replacement/
+</code></pre>
+<ul>
+<li><code>:s</code> indicates that you are using the substitute command.</li>
+<li><code>pattern</code> is the text you want to search for.</li>
+<li><code>replacement</code> is the text you want to replace the pattern with.</li>
+</ul>
+<h3 id="example">Example</h3>
+<p>To replace the first occurrence of "foo" with "bar" in the current line, you would use:</p>
+<pre><code>:s/foo/bar/
+</code></pre>
+<h2 id="globalreplacement">Global Replacement</h2>
+<p>To replace all occurrences of a pattern in the current line, you can add the <code>g</code> flag:</p>
+<pre><code>:s/foo/bar/g
+</code></pre>
+<h2 id="replacingintheentirefile">Replacing in the Entire File</h2>
+<p>To perform a substitution across the entire file, you can use the <code>%</code> symbol before the substitute command:</p>
+<pre><code>:%s/foo/bar/g
+</code></pre>
+<h2 id="confirmingeachreplacement">Confirming Each Replacement</h2>
+<p>If you want to confirm each replacement before it is made, you can add the <code>c</code> flag:</p>
+<pre><code>:%s/foo/bar/gc
+</code></pre>
+<p>Vim will prompt you for confirmation before replacing each occurrence of "foo".</p>
+<h2 id="casesensitivity">Case Sensitivity</h2>
+<p>By default, the substitute command is case-sensitive. To make it case-insensitive, you can add the <code>i</code> flag:</p>
+<pre><code>:%s/foo/bar/gi
+</code></pre>
+<p>This command will replace "foo", "Foo", "FOO", etc., with "bar".</p>
+<h2 id="usingregularexpressions">Using Regular Expressions</h2>
+<p>The substitute command also supports regular expressions, so you can write more complex search patterns. To replace any occurrence of "cat" or "dog" with "pet", you can use:</p>
+<pre><code>:%s/cat\|dog/pet/g
+</code></pre>
+<h2 id="specifyingthesearchandreplacementrange">Specifying the Search and Replacement Range</h2>
+<p>In Vim, you can specify the range of lines to search and replace within. This can be done using the <code>,</code> symbol:</p>
+<pre><code>&lt;start&gt;,&lt;end&gt;s/pattern/replacement/
+</code></pre>
+<h3 id="absolutelinenumbers">Absolute Line Numbers</h3>
+<p>For example, to replace "foo" with "bar" in lines 2 to 5, you would use:</p>
+<pre><code>2,5s/foo/bar/
+</code></pre>
+<h3 id="relativelinenumbers">Relative Line Numbers</h3>
+<p>You can also use relative line numbers to specify the range:</p>
+<pre><code>+2,+5s/foo/bar/
+</code></pre>
+<p>Assuming the current line is line 1, this command will replace "foo" with "bar" in lines 3 to 6.</p>
+<p>You can also use the <code>$</code> symbol to specify the end of the range:</p>
+<pre><code>2,$s/foo/bar/
+</code></pre>
+<p>This command will replace "foo" with "bar" in lines 2 to the end of the file.</p>
+<p>The <code>.</code> symbol is also useful for selecting the current line:</p>
+<pre><code>.,$s/foo/bar/
+</code></pre>
+<p>This command will replace "foo" with "bar" from the current line to the end of the file.</p>
+<h2 id="selectingthewholeword">Selecting the whole word</h2>
+<p>To match the whole word, you can use the <code>\&lt;</code> and <code>\&gt;</code> symbols:</p>
+<pre><code>:%s/\&lt;foo\&gt;/bar/g
+</code></pre>
+<p>This command will replace "foo" with "bar" in the current line, but not in "foobar".</p>
+<h2 id="tips">Tips</h2>
+<ul>
+<li><strong>Be cautious with global replacements</strong>: Always double-check your patterns to avoid unintended changes.</li>
+<li><strong>Use the <code>c</code> flag for confirmation</strong>: This can help prevent mistakes, especially in large files.</li>
+<li><strong>Practice with regular expressions</strong>: The more regex you know, the more you can do with the substitute command.</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<p>That covers the syntax and the flags. The rest is practice.</p>
+<p>Happy editing!</p>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

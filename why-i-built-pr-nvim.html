@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Why I started writing pr.nvim</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-09-14">Sun, September 14, 2025</time>
+        <h1 class="mar-b-7">Why I started writing pr.nvim</h1>
+    </header>
+    <h1 id="whyistartedwritingprnvim">Why I started writing pr.nvim</h1>
+<p>I've been a happy Neovim user for a while, and I review a lot of pull requests. The two activities don't combine very well.</p>
+<p>The usual flow looks like this:</p>
+<ol>
+<li>PR notification → open the browser.</li>
+<li>Read the diff in the browser, scroll up and down trying to remember the file structure.</li>
+<li>Want to check something three files away from the diff → switch to terminal, <code>nvim</code>, find the file, look at it, switch back to browser.</li>
+<li>Want to comment → click in the diff line, type, submit.</li>
+<li>Want to draft several comments and review them together → start a review on GitHub. Now the comments are in a third state ("pending"), and I can only see them by going back to a specific tab in the UI.</li>
+<li>CI failed → click the checks tab. Read the log. Curse a little.</li>
+</ol>
+<p>Multiply by ten PRs and a day is gone.</p>
+<p>I wanted the whole thing to live in the editor. So I started a plugin.</p>
+<div class="github-card" data-github="btj93/pr.nvim" data-width="400" data-height="" data-theme="default"></div>
+<h2 id="whatiactuallywanted">What I actually wanted</h2>
+<p>Before I wrote any plugin code, I wrote down what I was solving for:</p>
+<ol>
+<li><strong>Inline review threads, in the buffer.</strong> I want to open a file that has unresolved review comments and <em>see them as virtual text or signs</em> on the relevant lines. Same UX as LSP diagnostics, because that's what they are, conceptually.</li>
+<li><strong>A floating window to read and reply to threads.</strong> A real, focusable, scrollable window I can navigate with normal Vim motions, and one that doesn't disappear the moment you move the cursor.</li>
+<li><strong>Drafts that survive.</strong> If I open a thread, type half a reply and accidentally close it, the draft is still there next time.</li>
+<li><strong>One picker to find PRs.</strong> I shouldn't have to leave the editor to switch to a different PR.</li>
+<li><strong>Provider-agnostic.</strong> I work in GitHub mostly, but not exclusively. I don't want this rewritten if I ever land on a GitLab project.</li>
+</ol>
+<p>That last one turned out to drive most of the architecture.</p>
+<h2 id="theshellouttoaclidecision">The "shell out to a CLI" decision</h2>
+<p>I decided this very early: <strong>do not call provider APIs directly from Lua.</strong></p>
+<p>Reasons:</p>
+<ul>
+<li>I would have to reimplement auth flows for every provider: GitHub PATs, GitHub Apps, GitLab tokens, Bitbucket app passwords.</li>
+<li>I would have to track and update every provider's REST/GraphQL schema.</li>
+<li>I would have to handle rate limits, retries and pagination.</li>
+<li>And then I'd have a Neovim plugin that does HTTP. There's already a tool that does HTTP per provider, and <em>I already have it installed</em>: <a href="https://cli.github.com/"><code>gh</code></a>, <a href="https://gitlab.com/gitlab-org/cli"><code>glab</code></a>, <code>curl</code>.</li>
+</ul>
+<p>So the plugin shells out. Provider abstraction becomes a tiny strategy interface:</p>
+<pre><code class="lua language-lua">-- lua/pr/providers/init.lua
+local M = {}
+
+local providers = {
+  github    = require("pr.providers.github"),
+  gitlab    = require("pr.providers.gitlab"),
+  bitbucket = require("pr.providers.bitbucket"),
+}
+
+function M.get(name)
+  return providers[name] or error("unknown provider: " .. tostring(name))
+end
+
+return M
+</code></pre>
+<p>Each provider implements a small set of operations:</p>
+<pre><code>list_prs(opts, cb)
+get_pr(id, cb)
+get_threads(pr_id, cb)
+post_comment(pr_id, body, line, cb)
+submit_review(pr_id, event, cb)
+... and a few more
+</code></pre>
+<p>The implementation of each is "build the right CLI arg list, run it async via plenary, parse the JSON output". That's it.</p>
+<p>This buys me a few things I didn't think about at first:</p>
+<ul>
+<li><strong>Auth is solved.</strong> Whatever the user did to set up <code>gh auth login</code>, that's what the plugin uses.</li>
+<li><strong>Rate limits are solved.</strong> The CLI handles them.</li>
+<li><strong>I can debug by running the same CLI command myself.</strong> The plugin output is literally a JSON dump of <code>gh api ...</code>. I can copy the command from the plugin's log and run it in a terminal.</li>
+<li><strong>Adding a provider is a few hundred lines.</strong> GitLab and Bitbucket landed within weeks of GitHub working end-to-end.</li>
+</ul>
+<h2 id="inlinethreadsasvimdiagnostic">Inline threads as <code>vim.diagnostic</code></h2>
+<p>Review comments are conceptually just diagnostics. They have a location (file + line), a severity, and a message. Neovim already has an API for displaying those: <a href="https://neovim.io/doc/user/diagnostic.html"><code>vim.diagnostic</code></a>.</p>
+<p>So pr.nvim publishes review threads as diagnostics in a dedicated namespace:</p>
+<pre><code class="lua language-lua">local ns = vim.api.nvim_create_namespace("pr.nvim/threads")
+
+vim.diagnostic.set(ns, bufnr, {
+  {
+    lnum = thread.line - 1,
+    col = 0,
+    message = thread.body,
+    severity = severity_for(thread),
+    source = "pr.nvim",
+  },
+})
+</code></pre>
+<p>What that gives me:</p>
+<ul>
+<li>Threads show inline with whatever the user has already configured for diagnostics: virtual text, signs, virtual lines, underlines, whatever.</li>
+<li><code>]d</code> / <code>[d</code> jumps between threads, because to Neovim they <em>are</em> diagnostics.</li>
+<li><code>:PRQuickfix</code> is literally just <code>vim.diagnostic.setqflist({ namespace = ns })</code>.</li>
+<li>Themes and colorschemes already handle the styling.</li>
+</ul>
+<p>I get most of an inline review UX for free by building on top of <code>vim.diagnostic</code>.</p>
+<h2 id="outdatedandresolvedthreadswhattoshowbydefault">Outdated and resolved threads: what to show by default?</h2>
+<p>This one was tricky.</p>
+<p>A review thread can be:</p>
+<ul>
+<li><strong>active</strong>: the line still exists at this position in the current commit.</li>
+<li><strong>outdated</strong>: the line numbers no longer match the current commit's view of the file.</li>
+<li><strong>resolved</strong>: the review participants explicitly marked the conversation as done.</li>
+</ul>
+<p>Showing all three by default makes the buffer noisy. Showing only active hides important context, and sometimes you <em>want</em> to see what was said on a line that has since been refactored.</p>
+<p>The compromise I landed on:</p>
+<ul>
+<li>Active threads → inline by default.</li>
+<li>Outdated → off by default inline. Accessible via the picker and via filter toggles.</li>
+<li>Resolved → off by default inline. Toggleable to a low-severity (<code>INFO</code>) virtual line so the user's existing diagnostic theme can dim them visually.</li>
+</ul>
+<pre><code class="lua language-lua">opts = {
+  show_outdated_inline = false,
+  show_resolved_inline = false,
+  diagnostics = {
+    severity_resolved = vim.diagnostic.severity.INFO,
+  },
+}
+</code></pre>
+<p>Both toggles are reachable from the picker via <code>&lt;C-f&gt;</code> to cycle filters in place, so a user who <em>does</em> want to see all the context can flip them on without leaving the workflow.</p>
+<h2 id="thepopupisitsownheadache">The popup is its own headache</h2>
+<p>The other piece is the floating window, the one that opens when you hit <code>&lt;CR&gt;</code> on a thread.</p>
+<p>I tried implementing it from scratch with <code>nvim_open_win</code>. Bad time. There's the popup itself, but then there's a header, a body, a reply input, scrolling, focus management between header and body, key dispatch, layout on resize, layout on small screens, layout on multiple monitors…</p>
+<p>The thing that saved me was <a href="https://github.com/MunifTanjim/nui.nvim"><code>nui.nvim</code></a>. It's a UI-primitives library (popups, layouts, menus) and it does the chore work I really did not want to do. After switching to it, the popup code roughly halved and the bug count fell off a cliff. Async subprocess handling is via <a href="https://github.com/nvim-lua/plenary.nvim"><code>plenary.nvim</code></a>.</p>
+<h2 id="pickerascontrolsurface">Picker as control surface</h2>
+<p>The other thing that has scaled well: pickers (<a href="https://github.com/folke/snacks.nvim">snacks.nvim</a> / <a href="https://github.com/nvim-telescope/telescope.nvim">telescope.nvim</a> / <a href="https://github.com/ibhagwan/fzf-lua">fzf-lua</a>) as the central control surface.</p>
+<p>Rather than have a custom UI for "list PRs", "list threads" and "switch filters", every list-shaped thing is a picker entry. Users pick the picker they already use. The plugin defines actions on entries; the picker handles fuzzy matching, preview, multi-select, the works.</p>
+<pre><code>:PR
+   ├── list PRs in this repo
+   ├── filter: status (open/closed/all)
+   ├── filter: author
+   ├── action: checkout
+   ├── action: view info
+   └── action: pick a thread
+</code></pre>
+<p>If I add a feature, it usually appears as a new action on an existing picker, not a new command. Fewer entry points to remember.</p>
+<h2 id="whereitstandstoday">Where it stands today</h2>
+<p>Today, pr.nvim:</p>
+<ul>
+<li>Lists PRs across GitHub, GitLab, and Bitbucket Cloud.</li>
+<li>Shows review threads inline as diagnostics.</li>
+<li>Has a popup for reading threads and posting replies.</li>
+<li>Has a checkout action so I can land on a PR's branch without leaving the editor.</li>
+</ul>
+<p>There's a <em>lot</em> more I want to do: drafts that survive across sessions, full review submission with pending comments, suggestion blocks rendered as applyable diffs, status counters, CI checks. Some of that is already in progress. The next post will cover those pieces once they've shipped.</p>
+<p>For now, I haven't switched tabs to read a review comment in six weeks.</p>
+<p>Happy reviewing!</p>
+<h2 id="references">References</h2>
+<p><strong>Plugin runtime</strong></p>
+<ul>
+<li><a href="https://github.com/MunifTanjim/nui.nvim">nui.nvim</a> (UI primitives)</li>
+<li><a href="https://github.com/nvim-lua/plenary.nvim">plenary.nvim</a> (async helpers)</li>
+</ul>
+<p><strong>Provider CLIs</strong></p>
+<ul>
+<li><a href="https://cli.github.com/">GitHub CLI (<code>gh</code>)</a></li>
+<li><a href="https://gitlab.com/gitlab-org/cli">GitLab CLI (<code>glab</code>)</a></li>
+</ul>
+<p><strong>Pickers</strong></p>
+<ul>
+<li><a href="https://github.com/folke/snacks.nvim">snacks.nvim</a></li>
+<li><a href="https://github.com/nvim-telescope/telescope.nvim">telescope.nvim</a></li>
+<li><a href="https://github.com/ibhagwan/fzf-lua">fzf-lua</a></li>
+</ul>
+<p><strong>Neovim APIs</strong></p>
+<ul>
+<li><a href="https://neovim.io/doc/user/diagnostic.html"><code>vim.diagnostic</code></a> (diagnostic publishing/jumping)</li>
+<li><a href="https://neovim.io/doc/user/api.html">Lua API (<code>nvim_create_namespace</code> etc.)</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

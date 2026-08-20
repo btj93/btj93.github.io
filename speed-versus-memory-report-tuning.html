@@ -1,0 +1,941 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Speed versus memory — six weeks of benchmarks, and the five conclusions I had to take back</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2026-09-01">Tue, September 01, 2026</time>
+        <h1 class="mar-b-7">Speed versus memory — six weeks of benchmarks, and the five conclusions I had to take back</h1>
+    </header>
+    <h1 id="speedversusmemorysixweeksofbenchmarksandthefiveconclusionsihadtotakeback">Speed versus memory — six weeks of benchmarks, and the five conclusions I had to take back</h1>
+<p>We have an analytics report at work that aggregates a month of clinical records: for each treatment performed, how many, for which age bracket, under which insurance, worth how many points. One office, one month, optionally grouped by tag or by staff member.</p>
+<p>The first working version took <strong>10.39 seconds and issued 25,001 queries</strong> for a hundred thousand items. The instance it runs on has 512 MB of RAM and a quarter of a vCPU.</p>
+<p>Five phases later, at <em>ten million</em> rows, it does the same job with <strong>4 queries.</strong></p>
+<p>Every claim below is tied to the benchmark that produced it and the conditions it ran under. I'm being pedantic about that on purpose, because the most useful thing I learned here is that <strong>five conclusions I had already written down and acted on were wrong</strong>, and not one of them was wrong because of the code.</p>
+<p>Every implementation rebuilt from its own commit and re-run at 10M rows on 1 vCPU:</p>
+<table>
+<thead>
+<tr>
+<th>implementation</th>
+<th>10M rows</th>
+<th>queries @10M</th>
+<th>peak heap @10M</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>C4 (first version)</td>
+<td>169.692 s</td>
+<td>5,001</td>
+<td>1,571 MB</td>
+</tr>
+<tr>
+<td>Phase 1</td>
+<td>71.253 s</td>
+<td>5,001</td>
+<td><strong>55.7 MB</strong></td>
+</tr>
+<tr>
+<td>Phase 3</td>
+<td>62.105 s</td>
+<td>5,001</td>
+<td>56.3 MB</td>
+</tr>
+<tr>
+<td>Phase 4</td>
+<td>46.207 s</td>
+<td>752</td>
+<td>392.6 MB</td>
+</tr>
+<tr>
+<td><strong>Phase 5</strong></td>
+<td><strong>20.530 s</strong></td>
+<td><strong>4</strong></td>
+<td>506.5 MB</td>
+</tr>
+</tbody>
+</table>
+<p><em>(Health warning before you lean on those digits: the cells are single runs, and the fixture changes between the first three rows and the last two. Cross-session drift of up to ±30% turned up on this harness. Trust the ordering and the order of magnitude, not the decimals.)</em></p>
+<p>Wall time falls monotonically, 8.3× end to end. Peak heap doesn't. It drops 28× at Phase 1, then climbs back up 9×.</p>
+<p>Phase 1 is the memory minimum, and it is pure streaming. Every phase after it spent memory to eliminate round trips, and did it deliberately, with the bill written down each time.</p>
+<p>So the tradeoff behaved differently depending on how far back you stand. Inside a single read shape it kept dissolving: streaming the office-wide join is faster than loading it <em>and</em> 68× smaller. Across the project it was real, and by the last phase memory pressure had started converting back into wall time.</p>
+<p>A caveat I'll repeat where it bites. Every number here is a benchmark on one developer machine with MySQL co-resident, against synthetic data, with two cross-database dependencies substituted. They come from <strong>three different environments</strong>: the early bake-off figures predate the harness entirely, the 2026-07-29 comparison tables were taken in pinned containers, and the Phase-5 tables were taken on an M2 Pro outside one. Numbers are comparable <em>within</em> an environment and not across them, so I've labelled which is which throughout. None of them are production latencies.</p>
+<h2 id="themeasurementharnessbeforeanythingelse">The measurement harness, before anything else</h2>
+<p>The benchmarks drive the actual use case against a live MySQL, through the actual repositories and the actual GORM queries, with nothing mocked. They sit behind an env gate so a normal <code>go test ./...</code> skips them:</p>
+<pre><code class="go language-go">if os.Getenv("RUN_DB_BENCH") != "1" {
+    b.Skip("set RUN_DB_BENCH=1 (and start the local MySQL) to run")
+}
+</code></pre>
+<p>Two dependencies are substituted, which matters when you read the heap tables below. Patient birthdays live in a second database that the timings deliberately exclude, and the master-data client is an in-memory stand-in.</p>
+<p>Every DB-backed arm in the report benchmark runs through one shared harness. Each line of it exists because something went wrong without it:</p>
+<pre><code class="go language-go">func runBenchReportArm(b *testing.B, name string, op func() error) {
+    b.Run(name, func(b *testing.B) {
+        // Warm this arm's pages and caches before timing anything.
+        if err := op(); err != nil {
+            b.Fatalf("%s warm-up: %v", name, err)
+        }
+
+        runtime.GC()
+        b.ReportAllocs()
+
+        // Reproduce the 512MB instance's ceiling for the timed section only.
+        debug.SetMemoryLimit(460 &lt;&lt; 20)
+        defer debug.SetMemoryLimit(math.MaxInt64)
+
+        sampler := startHeapSampler()
+        defer sampler.stopAndPeak()
+
+        dbBenchQueryCount.Store(0)
+        b.ResetTimer()
+
+        for range b.N {
+            if err := op(); err != nil {
+                b.Fatalf("%s: %v", name, err)
+            }
+        }
+
+        b.StopTimer()
+
+        b.ReportMetric(float64(sampler.stopAndPeak())/1e6, "peakHeapMB")
+        b.ReportMetric(float64(dbBenchQueryCount.Load())/float64(b.N), "queries/op")
+    })
+}
+</code></pre>
+<p><strong>The discarded warm-up run.</strong> An earlier phase of this report was misled by a cold InnoDB buffer pool. Arms run in a <em>fixed</em> order with the baseline first, so without a warm-up the baseline absorbs the cold-page cost of every table the tier touches while the later arms run warm. That inflates the ratio in the direction that flatters the change. At <code>-benchtime 3x</code>, one cold iteration is a third of the reported mean.</p>
+<p><strong><code>SetMemoryLimit(460 &lt;&lt; 20)</code> around the timed section.</strong> This models the 512 MB instance, so a materialization that would OOM in production shows up as GC thrash rather than passing quietly on a 32 GB laptop.</p>
+<p><strong>A query counter</strong>, wired as a GORM callback. Query count turned out to be the most predictive number in the project. More than allocations, more than heap.</p>
+<p><strong>Two memory metrics that do not mean the same thing.</strong> The peak sampler polls on a ticker:</p>
+<pre><code class="go language-go">// benchHeapSampler polls runtime.ReadMemStats().HeapAlloc on a ~5ms ticker
+// and tracks the maximum live-heap size observed.
+</code></pre>
+<p>So <code>peakHeapMB</code> is a <em>sample</em> of <code>HeapAlloc</code>: a lower bound on the true peak (a spike between two ticks is invisible), and it counts uncollected garbage as though it were live. Whereas:</p>
+<pre><code class="go language-go">// benchRetainedHeapBytes returns the live-heap growth caused by holding build()'s result.
+// allocs/op and B/op count everything a build TOUCHES; this counts only what SURVIVES.
+// Two GCs on each side because the first can leave the second's finalisable garbage behind.
+func benchRetainedHeapBytes(build func() any) uint64 {
+    runtime.GC()
+    runtime.GC()
+    var before, after runtime.MemStats
+    runtime.ReadMemStats(&amp;before)
+
+    held := build()
+
+    runtime.GC()
+    runtime.GC()
+    runtime.ReadMemStats(&amp;after)
+    runtime.KeepAlive(held)
+
+    if after.HeapAlloc &lt; before.HeapAlloc {
+        return 0
+    }
+
+    return after.HeapAlloc - before.HeapAlloc
+}
+</code></pre>
+<p>Touched versus survives. I confused the two and put a 4× error into a design doc; that comes up later.</p>
+<h2 id="wherewestarted25001queries">Where we started: 25,001 queries</h2>
+<p>The original design was a per-patient loop. For each patient, fetch records, then blocks, then items, then resolve which insurance was billing. Collect everything, then aggregate.</p>
+<p>The design doc raised performance <em>before a line was written</em>: the per-patient loop plus the billable-group fetcher's own documented N+1 "can reach tens of thousands of sequential queries for a large office." It set a target of <strong>p95 ≤ 3 s</strong>.</p>
+<p>It set no memory target at all: no heap budget, no RAM cap. Half of what follows comes out of that omission.</p>
+<p><code>BenchmarkCollectTreatmentReport</code>, 100,000 items across 5,000 patients, collect <em>and</em> aggregate:</p>
+<table>
+<thead>
+<tr>
+<th>metric</th>
+<th>v1 per-patient</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>wall</td>
+<td><strong>10,394 ms</strong></td>
+</tr>
+<tr>
+<td>queries</td>
+<td><strong>25,001</strong> (= 5 × patients + 1)</td>
+</tr>
+</tbody>
+</table>
+<p>Then the seeder was extended to actually populate insurance rows. It hadn't been, so every billable-group lookup returned empty and skipped the N+1 underneath it. Query count went from 25,001 to <strong>28,751</strong>. The benchmark had been measuring a cheaper report than the real one for its first three tiers.</p>
+<p>Measured properly, on the seeded data, the collect step alone churns through <strong>605.9 MB across 11.36 M allocations</strong> per report at 100k items. That's allocation <em>volume</em>, not resident memory. Peak heap for the same run is 38.1 MB.</p>
+<p>How much of the 10 seconds is the aggregation itself? <code>BenchmarkAggregateTreatmentReport</code> runs the pure in-memory fold, no database:</p>
+<table>
+<thead>
+<tr>
+<th>records</th>
+<th>wall</th>
+<th>bytes</th>
+<th>allocations</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>100,000</td>
+<td>16.3 ms</td>
+<td>3.12 MB</td>
+<td>104,280</td>
+</tr>
+<tr>
+<td>1,000,000</td>
+<td>161.8 ms</td>
+<td>24.7 MB</td>
+<td>1,004,280</td>
+</tr>
+</tbody>
+</table>
+<p><strong>16 ms of aggregation inside a 10,394 ms report</strong>, 0.16% of the wall, and perfectly linear. Knowing that on day one is why nobody spent a week optimising the fold.</p>
+<h2 id="thebakeofffivecollectorsandalessonaboutnoise">The bake-off: five collectors, and a lesson about noise</h2>
+<p>Five collection strategies, each gated behind a differential test asserting data-equal output against v1 before it was allowed to compete. Group-row order gets normalized by key first, because first-seen ordering legitimately differs between strategies.</p>
+<p>At 100,000 items, <code>groupBy=none</code>, collect-only, <code>GOMAXPROCS=1</code>:</p>
+<table>
+<thead>
+<tr>
+<th>strategy</th>
+<th>wall</th>
+<th>peak heap</th>
+<th>queries</th>
+<th>allocations</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v1 per-patient</td>
+<td>8,579 ms</td>
+<td>38.1 MB</td>
+<td>28,751</td>
+<td>11.36 M</td>
+</tr>
+<tr>
+<td>C1 load-all</td>
+<td>4,492 ms</td>
+<td><strong>179.3 MB</strong></td>
+<td>13,754</td>
+<td>8.93 M</td>
+</tr>
+<tr>
+<td>C3 chunk-50</td>
+<td>4,474 ms</td>
+<td>51.0 MB</td>
+<td>14,051</td>
+<td>8.99 M</td>
+</tr>
+<tr>
+<td>C3 chunk-200</td>
+<td><strong>4,359 ms</strong></td>
+<td><strong>46.9 MB</strong></td>
+<td>13,826</td>
+<td>8.95 M</td>
+</tr>
+<tr>
+<td>C3 chunk-500</td>
+<td>4,349 ms</td>
+<td>52.1 MB</td>
+<td>13,781</td>
+<td>8.94 M</td>
+</tr>
+<tr>
+<td>C3 chunk-1000</td>
+<td>5,345 ms</td>
+<td>59.6 MB</td>
+<td>13,766</td>
+<td>8.94 M</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Load-all costs 3.8× the memory and is <em>slower</em>.</strong> C1 sits at 179.3 MB against chunk-200's 46.9 MB, and loses on wall time too. At this size that wasn't a budget failure. 179 MB cleared the ~400 MB target comfortably. We rejected it on shape. Chunked heap is independent of office size; load-all's grows with it. What killed it was the slope.</p>
+<p><strong>More queries can be faster.</strong> chunk-200 issues 72 <em>more</em> queries than load-all and beats it by 133 ms. Smaller result sets mean less allocation churn and less GC pressure under a 460 MiB limit, which outweighed the extra round-trips.</p>
+<p><strong>Chunk size is not monotonic.</strong> chunk-1000 is slower than both chunk-500 and chunk-200 while also using more memory. "Fewer round-trips is always faster" breaks down somewhere between 500 and 1000 patients per <code>IN</code> list.</p>
+<p>The big lever was the insurance loop. The residual per-patient calls were ~97% of what remained (13,750 of ~14,000 queries). Batching them, at the same chunk size, took 100k from 5,072 ms / 13,826 queries to <strong>905 ms / 126 queries</strong>; at chunk 500 it reached <strong>863 ms / 51 queries</strong>.</p>
+<h3 id="thenumberthatshouldhavestoppedme">The number that should have stopped me</h3>
+<p>Those two sweeps also contain the number that invalidates most of the following month.</p>
+<p><strong>The same v1 arm, same machine, about 41 minutes apart: 8,579 ms and 9,990 ms.</strong> A 16% spread.</p>
+<p>Meanwhile the decisions I was making off that harness were between candidates separated by <strong>0.2%</strong> (chunk-500 vs chunk-200) and <strong>3%</strong> (chunk-500 vs load-all).</p>
+<p>I was resolving 0.2% differences with an instrument that moved 16% between sweeps. Everything in the next three phases inherited that.</p>
+<p>And the 16% isn't even clean drift. The billable-insurance service that every arm calls was refactored between the two sweeps, so the gap is drift plus an uncontrolled change, and I can't tell you how much of each. I couldn't take my own instrument's error apart, and I used it to settle 0.2% differences anyway.</p>
+<h2 id="phase1foldinsteadofcollect">Phase 1: fold instead of collect</h2>
+<p>C4 still accumulated every record before aggregating, so peak heap was <code>O(rows)</code>. The scaling run measured <strong>402 MB at 1M rows</strong>, 78% of the instance, and projected a hard OOM just above 1.15M.</p>
+<p>The fix is not clever. A sum doesn't need every row at once, and the output is a few hundred rows whether the input is 100k items or 10M. So restructure from <em>accumulate-all → resolve → aggregate</em> into a per-chunk fold:</p>
+<pre><code class="go language-go">acc := newTreatmentReportAccumulator(groupBy, period)
+for chunk := range chunks {
+    records := collect(chunk)
+    acc.fold(records, resolve(chunk))   // fold, then drop
+}
+return acc.assemble()
+</code></pre>
+<p>Phase 1 also materialized a <code>count</code> column. The per-item billing count had been living inside a JSON <code>attributes</code> blob, so the collector parsed JSON <strong>one million times per report</strong> on the hot path, and fetched the largest column in the table to do it. A slim projection returning <code>(BlockID, ReferenceID, Count)</code> meant the blob was never fetched, transferred, or parsed.</p>
+<p>At 1M rows in the controlled environment described later:</p>
+<table>
+<thead>
+<tr>
+<th>1M rows</th>
+<th>C4</th>
+<th>Phase 1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>wall</td>
+<td>10,422 ms</td>
+<td><strong>6,638 ms</strong></td>
+</tr>
+<tr>
+<td>peak heap</td>
+<td>326.3 MB</td>
+<td><strong>10.7 MB</strong></td>
+</tr>
+<tr>
+<td>allocations</td>
+<td>62.8 M</td>
+<td>29.9 M</td>
+</tr>
+</tbody>
+</table>
+<p>A 1.57× speedup and a <strong>30× memory reduction</strong> out of one change. At 10M rows, Phase 1's peak heap is 55.7 MB against C4's 1,571 MB: <strong>28× smaller.</strong></p>
+<p>The accumulator is now sized by <code>O(distinct output groups)</code> instead of <code>O(input rows)</code>. Phase 1 stayed the memory floor for the whole project; nothing later beat it.</p>
+<p><strong>It also introduced a correctness bug that is still open.</strong> <code>ADD COLUMN count NOT NULL DEFAULT 0</code> sets every pre-existing row to 0, and the read path filters <code>count &gt; 0</code>. Every item written before the migration is silently excluded, so historical months under-count. The backfill was consciously deferred (the product is unreleased) and it's written in bold in the design doc. The JSON parse we deleted was also the thing that made old rows readable.</p>
+<h2 id="phase2anallocationwinthatwasnotalatencywin">Phase 2: an allocation win that was not a latency win</h2>
+<p>Many items in a block share a treatment code, so group in SQL, <code>SUM(count) ... GROUP BY block_id, reference_id</code>, and ship one row per <code>(block, code)</code> instead of one per item.</p>
+<p>The reasoning was explicitly about <strong>asymmetric hardware</strong>: a 0.25-CPU app next to a capable managed MySQL means DB CPU is cheap and app CPU is expensive, so move work <em>toward</em> the database. The doc hedged it ("must be watched in the bench"), which was the right instinct.</p>
+<p>The A/B, same data with and without the roll-up, mean of three:</p>
+<table>
+<thead>
+<tr>
+<th>tier</th>
+<th>ungrouped</th>
+<th>grouped</th>
+<th>Δ wall</th>
+<th>Δ allocations</th>
+<th>Δ bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>100k</td>
+<td>0.563 s</td>
+<td>0.508 s</td>
+<td>−9.7%</td>
+<td>−24.3%</td>
+<td>−38.6%</td>
+</tr>
+<tr>
+<td>500k</td>
+<td>2.740 s</td>
+<td>2.546 s</td>
+<td>−7.1%</td>
+<td>−24.3%</td>
+<td>−38.9%</td>
+</tr>
+<tr>
+<td>1M</td>
+<td>5.582 s</td>
+<td>5.228 s</td>
+<td>−6.3%</td>
+<td>−24.3%</td>
+<td>−39.0%</td>
+</tr>
+<tr>
+<td>2M</td>
+<td>10.633 s</td>
+<td>10.408 s</td>
+<td><strong>−2.1%</strong></td>
+<td>−24.3%</td>
+<td>−39.0%</td>
+</tr>
+</tbody>
+</table>
+<p>The allocation saving is <strong>exactly −24.3% at every tier, to the decimal</strong>, a structural property of the row shape, completely scale-invariant. The wall saving decays monotonically and by 2M sits at −2.1%, inside the noise band.</p>
+<p>So Phase 2 buys allocations and GC pressure. At the size it was designed for, <strong>it does not buy latency.</strong></p>
+<p>I had recorded it as "−7% wall", a figure taken at 1M, in a run that already showed 2M coming out roughly flat. The flat tier was right there in the same table, and I quoted the one that made the change look good. Allocation counts are deterministic and beautifully reproducible, which makes them easy to measure and dangerously easy to mistake for a latency result. A −24% allocation cut is worth having on a CPU-starved box, because GC work is CPU you don't have. It is still not a −24% report.</p>
+<p>(The roll-up got re-proposed twice more. In the Phase-5 architecture it delivered its Go-side promise exactly (<strong>−67% allocations, −66% bytes</strong>) while <strong>wall rose 248%</strong> and peak heap didn't move. The doc's note about it is my favourite line in the repo: <em>"This section exists so it is not re-proposed a fourth time."</em>)</p>
+<h2 id="phase3theprofilerwaslying">Phase 3: the profiler was lying</h2>
+<p>Phase 3 started with a profile, which overturned two things I had been assuming for weeks.</p>
+<p><strong>"The report is 91% DB-bound."</strong> That came from a timing callback wrapping the whole query call, which includes GORM's row scan and struct materialization. <code>EXPLAIN ANALYZE</code> put actual database execution at <strong>~1.5 s of a ~5.5 s pass at 1M</strong>. The report was app-CPU-bound on turning rows into objects, and I had spent weeks believing the opposite.</p>
+<p><strong>"The fix has to be a smarter query."</strong> It wasn't. Each block entity unmarshalled two <code>serializer:json</code> columns, <code>diseases</code> and <code>dental_formula_detail</code>, and built value objects from them. The report reads exactly two fields off a block: its ID and its record ID. Every one of those JSON parses was discarded.</p>
+<p>Replacing the entity fetch with a two-column projection:</p>
+<table>
+<thead>
+<tr>
+<th>1M rows</th>
+<th>Phase 1</th>
+<th>Phase 3</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>wall</td>
+<td>6,638 ms</td>
+<td><strong>6,150 ms</strong></td>
+</tr>
+<tr>
+<td>allocations</td>
+<td>29.9 M</td>
+<td><strong>24.3 M</strong></td>
+</tr>
+</tbody>
+</table>
+<p>−7.4% wall, −19% allocations, purely from not doing work.</p>
+<p>Two negative results from the same phase:</p>
+<ul>
+<li><strong>Pushing the whole aggregation into SQL</strong> measured <strong>~3% slower</strong>; <code>EXPLAIN ANALYZE</code> showed the cross-join <code>GROUP BY</code> forcing a ~3 s "Aggregate using temporary table."</li>
+<li><strong>Applying the same projection to the records</strong> was worth ~2%, because records carry no JSON columns, confirming the cost was the unmarshal, not row count.</li>
+</ul>
+<p>And the verdict I wrote at the time was <strong>"about 2% of the full pass — basically noise,"</strong> from comparing two single runs at different moments, 5.974 s against 6.051 s. A real 7% gain discarded as jitter, by an instrument with 16% drift.</p>
+<h2 id="phase4wherethetradeoffdissolveslocally">Phase 4: where the tradeoff dissolves, locally</h2>
+<p>After Phase 3 the pipeline still issued <strong>501 queries</strong> at 1M rows, and wall time was dominated by round-trips. The fix is to let the database do the join. The interesting question is how to <em>consume</em> it.</p>
+<p>Five read shapes, prototyped against the same seeded million-row office on Phase-3 code:</p>
+<table>
+<thead>
+<tr>
+<th>shape</th>
+<th>wall</th>
+<th>peak heap</th>
+<th>allocations</th>
+<th>verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>staged 3 reads, chunk 500</td>
+<td>5.208 s</td>
+<td>5.1 MB</td>
+<td>19.9 M</td>
+<td>baseline</td>
+</tr>
+<tr>
+<td>staged 3 reads, chunk 4000</td>
+<td>5.561 s</td>
+<td>15.6 MB</td>
+<td>19.8 M</td>
+<td>worse on both</td>
+</tr>
+<tr>
+<td>join, chunked per patient</td>
+<td>2.992 s</td>
+<td>6.6 MB</td>
+<td>20.3 M</td>
+<td></td>
+</tr>
+<tr>
+<td>join, office-wide, load-all</td>
+<td>1.290 s</td>
+<td><strong>278.6 MB</strong></td>
+<td>20.0 M</td>
+<td>memory trap</td>
+</tr>
+<tr>
+<td>join, office-wide, cursor-streamed</td>
+<td><strong>1.169 s</strong></td>
+<td><strong>4.1 MB</strong></td>
+<td><strong>7.0 M</strong></td>
+<td>adopted</td>
+</tr>
+</tbody>
+</table>
+<p>The load-everything join is what you reach for when you've decided to buy speed with memory. It costs 278.6 MB, more than half the instance, and it is <strong>slower</strong> than streaming the same join off a cursor. The stream wins on wall, on memory by <strong>68×</strong>, and on allocations by nearly 3×.</p>
+<p>There was no tradeoff here at all, just a materialization step costing 274 MB that bought nothing, because nothing downstream ever needed two rows at once. Allocations collapse from 20.0 M to 7.0 M for the same reason the heap does: the slice that would have held a million joined rows never exists, so neither does the churn of growing it nor the GC work of tracing it.</p>
+<p>That got promoted to a hard constraint:</p>
+<blockquote>
+  <p>Never materialize the joined result set. The stream MUST use <code>Rows()</code> + <code>rows.Next()</code>, folding a small buffer at a time. <code>.Scan(&amp;slice)</code> over the join measured 277 MB — forbidden.</p>
+</blockquote>
+<p>…with a tripwire in the benchmark: <em>"If peak heap exceeds ~50 MB at any tier, STOP and report — that means a forbidden materialization crept in."</em></p>
+<h3 id="thephaseasawholestillcostmemory">The phase as a whole still cost memory</h3>
+<p>This is where I had to correct my own spec.</p>
+<p>A single office-wide cursor <strong>cannot pause mid-stream</strong> to look things up. So to make one streamed pass possible, two things have to be resolved <em>up front</em> and held for the duration: a record→insurance bucket map, and patient birthdays (which live in a different database entirely and can never be a join column).</p>
+<p>Those pre-resolves are what cost the memory. At 1M rows, peak heap went 11.0 MB → 23.8 MB. At 10M rows, <strong>56.3 MB → 392.6 MB.</strong> Phase 1's flat heap is gone, because the bucket map is <code>O(records)</code> and the birthdays are <code>O(patients)</code>.</p>
+<p>The spec had claimed "~10–20 MB" and had to be corrected in place:</p>
+<blockquote>
+  <p>the retained figure (7.6 MB) is in that range, but it is <strong>no longer flat</strong> across tiers as Phase 1's was</p>
+</blockquote>
+<p>So the trade is: <strong>one office-wide streaming pass buys 41% of the wall and eliminates 424 of 501 queries, paid for with pre-resolve maps that grow with office size.</strong> Good deal. But a deal, and I originally wrote it up as a free win.</p>
+<p>(Two smaller costs. Phase 4 allocates <em>more</em> than Phase 3 (27.0 M vs 24.3 M) because a joined row carries seven fields per item where the staged read carried three. And streaming broke an unspecified API contract: group rows had been emitted in first-seen order, which depended on stream order. Adding <code>ORDER BY</code> would reintroduce a filesort and kill the streaming, so the fix was sorting group keys at assemble time, a <strong>visible behavioural change</strong>. The ordering test deliberately uses staff IDs 9 and 10, because a naive string sort puts "10" before "9".)</p>
+<h3 id="whatthepeakheapnumbercontains">What the peak heap number contains</h3>
+<p>Running <code>benchRetainedHeapBytes</code> against each stage, forcing collection and measuring what survives, at 1M rows, 150k records, 50k patients:</p>
+<table>
+<thead>
+<tr>
+<th>stage</th>
+<th>retained</th>
+<th>why it exists</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baseline</td>
+<td>0.76 MB</td>
+<td>—</td>
+</tr>
+<tr>
+<td>patient IDs</td>
+<td>+0.43 MB</td>
+<td>the window's distinct patients</td>
+</tr>
+<tr>
+<td>record→insurance bucket</td>
+<td>+4.82 MB</td>
+<td>derived over other tables; a cursor can't pause to compute it</td>
+</tr>
+<tr>
+<td>birthdays</td>
+<td>+1.97 MB</td>
+<td>ages live in a different database</td>
+</tr>
+<tr>
+<td>stream + assemble</td>
+<td>+0.36 MB</td>
+<td>a fixed 2,000-row fold buffer, plus output cells</td>
+</tr>
+<tr>
+<td><strong>total retained</strong></td>
+<td><strong>7.58 MB</strong></td>
+<td>against a <strong>23.78 MB</strong> sampled peak</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Two-thirds of the scary number was collectable churn.</strong> With <code>GOGC=100</code> a collection doesn't trigger until the heap reaches roughly twice the live set, so an ~8 MB live heap naturally <em>samples</em> at 16–23 MB.</p>
+<p>The architecture diagram had estimated the bucket map at ~2.4 MB; measured, it's 4.8 MB, the largest retained term. And an earlier spec revision had extrapolated the <em>sampled</em> figure to claim ~300 MB live at a 10M-item office. Extrapolating the <em>retained</em> figure gives <strong>~76 MB</strong>. Wrong by 4×, from scaling the wrong metric.</p>
+<p>I later tried to lean on that ~2× rule and it broke. Across five tiers, the ratio of "peak dropped" to "live set removed" ranged <strong>0.98× to 3.53×</strong>; across all fifteen arms, <strong>0.44× to 3.98×</strong>. GC pacing explains why removing X removes more than X. It does not predict any individual number.</p>
+<h2 id="theremeasurementandfiveconclusionsihadtotakeback">The re-measurement, and five conclusions I had to take back</h2>
+<p>By this point I had a month of conclusions gathered piecemeal: single runs, over several days, on a machine also running the database under test.</p>
+<p>So I rebuilt every phase from its own commit via git worktrees, cross-compiled each to a static Linux binary, and ran them in identical pinned containers (<code>--cpus=1 --memory=8g</code>, <code>GOMAXPROCS=1</code>) against one freshly created MySQL 8.0 on a private Docker network. Three passes each. Application logging suppressed, because the insurance service emits one INFO line per billable group, <strong>15 MB of log in 60 s</strong>, and that stderr I/O had been inside the original timings.</p>
+<p>Then, before measuring anything, I ran one identical configuration twice to find out what the instrument could resolve: <strong>1–3%.</strong> That became the yardstick. Anything smaller is not a result.</p>
+<p>Five things I had written down turned out to be false.</p>
+<p><strong>1. "The chunked join is a 77.6 s index disaster — 14× slower — the shape is fatal."</strong>
+Re-measured: <strong>2.99 s.</strong> The collapse was a missing composite index, not the read shape. With the index present the chunked join actually <em>beats</em> the three staged reads, 2.99 s against 5.21 s. I had condemned an architecture in writing, for a schema problem, and been wrong by 26×.</p>
+<p><strong>2. "Phase 3 was about 2% — basically noise."</strong>
+Re-measured: <strong>−7.4% wall and −19% allocations at 1M</strong>, and a consistent 7–12% wall gain at every tier.</p>
+<p><strong>3. "Phase 2 bought −7% wall."</strong>
+Re-measured: <strong>−2.1% at 2M</strong>, inside the noise band. The −7% was real at 1M and I quoted it as the result, when the tier trend across the whole table was the result.</p>
+<p><strong>4. "More CPU is a dead end — 4× the CPU bought only 1.35×."</strong>
+Re-measured on Phase-4 code: <strong>2.18×.</strong></p>
+<table>
+<thead>
+<tr>
+<th>CPU quota</th>
+<th>wall @ 1M</th>
+<th>vs 1.0 vCPU</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.0 vCPU</td>
+<td>3.606 s</td>
+<td>—</td>
+</tr>
+<tr>
+<td>0.5 vCPU</td>
+<td>4.064 s</td>
+<td>+13%</td>
+</tr>
+<tr>
+<td>0.25 vCPU (production)</td>
+<td>7.857 s</td>
+<td>+118%</td>
+</tr>
+</tbody>
+</table>
+<p>This one reversed rather than sharpened, and for a structural reason. The original was measured by <code>getrusage</code> at 34% CPU / 66% DB-wait. Removing 424 of 501 queries took most of the DB-wait out, leaving roughly 40% compute / 60% wait at 1 vCPU and CPU-dominated at 0.25. <strong>Fixing the I/O problem is what made buying CPU worthwhile.</strong> "Scaling up won't help" was a true statement about a system that no longer existed.</p>
+<p><strong>5. "C4 out-of-memories past about 1.15M rows."</strong>
+It doesn't. C4's benchmark only ever had three tiers, and the OOM was fitted through them: 402 MB at 1M, extrapolated into the 460 MiB limit. Adding a 2M tier to a variant of the benchmark and actually running it (a single pass, not the mean of three): it completes in 19.76 s at <strong>394.1 MB peak</strong>, under the limit. The GC contains it by working harder, so C4 <em>degrades</em> rather than dying.</p>
+<p>They aren't one mistake repeated. Each went wrong in its own way:</p>
+<ul>
+<li><strong>Below the noise floor</strong> (#2 and #3). I measured a difference smaller than my drift, without knowing what my drift was.</li>
+<li><strong>A confounded variable</strong> (#1). Phases 1–3 had historically run <em>without</em> the composite index, Phase 4 <em>with</em> it. Until every arm ran on the same schema I was moving code and schema together and attributing all of it to code. This is the worst of the four, because more repetitions would not have caught it.</li>
+<li><strong>A statement that expired</strong> (#4). "More CPU won't help" was <em>true</em> when measured, at 34% CPU / 66% DB-wait. Deleting 424 queries changed the ratio and quietly falsified it. Nobody re-ran it because nobody thought of a conclusion as something with a shelf life.</li>
+<li><strong>An extrapolation never checked</strong> (#5). A line through three points, promoted to a fact about a fourth.</li>
+</ul>
+<h2 id="phase5buyingspeedwithmemoryonpurpose">Phase 5: buying speed with memory, on purpose</h2>
+<p>After Phase 4, two-thirds of the remaining wall was one phase: the insurance pre-resolve. It issued 75 of the 77 queries and was the last path constructing full domain entities, reading whole records and insurance objects to collapse them into a four-value enum.</p>
+<p>The reformulation that killed it: <em>a record's insurance bucket is the bucket of the first coverage window, in sort order, whose clipped date range contains the record's date.</em> Coverage windows come from two slim office-wide reads. <strong>No record read, no entity construction</strong>, which is the entire basis for deleting 75 queries.</p>
+<p>The insurance phase in isolation, at 1M rows:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Phase 4</th>
+<th>Phase 5</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>wall</td>
+<td>2.274 s</td>
+<td><strong>0.029 s</strong></td>
+</tr>
+<tr>
+<td>queries</td>
+<td>75</td>
+<td><strong>1</strong></td>
+</tr>
+<tr>
+<td>allocations</td>
+<td>9.51 M</td>
+<td>0.38 M</td>
+</tr>
+<tr>
+<td>bytes</td>
+<td>334.7 MB</td>
+<td>14.1 MB</td>
+</tr>
+</tbody>
+</table>
+<p>End to end, both arms in the same run, same office, same harness:</p>
+<table>
+<thead>
+<tr>
+<th>tier</th>
+<th>Phase-4 shape</th>
+<th>Phase 5 <code>groupBy=none</code></th>
+<th>ratio</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>100k</td>
+<td>352.8 ms</td>
+<td>107.9 ms</td>
+<td>3.27×</td>
+</tr>
+<tr>
+<td>500k</td>
+<td>2,239.3 ms</td>
+<td>642.6 ms</td>
+<td>3.48×</td>
+</tr>
+<tr>
+<td><strong>1M</strong></td>
+<td><strong>3,825.2 ms</strong></td>
+<td><strong>1,495.6 ms</strong></td>
+<td><strong>2.56×</strong></td>
+</tr>
+<tr>
+<td>2M</td>
+<td>8,618.5 ms</td>
+<td>3,368.3 ms</td>
+<td>2.56×</td>
+</tr>
+<tr>
+<td>5M</td>
+<td>23,644.8 ms</td>
+<td>12,523.6 ms</td>
+<td>1.89×</td>
+</tr>
+</tbody>
+</table>
+<p>Queries at 1M: <strong>77 → 4</strong> (6 for <code>tag</code>, 5 for <code>staff</code>). <code>tag</code> costs +31% over <code>none</code>; <code>staff</code> +2%.</p>
+<p><em>(This ran on a different machine from the earlier tables, on a seed with more insurance data. The absolutes are not interchangeable; the arm-versus-arm <strong>ratios</strong> are what carry, because both columns came from the same run. The design doc freezes this table at a specific commit and forbids recomputing it. The Phase-4 arm was deleted afterwards, and dividing a fresh Phase-5 number by a frozen Phase-4 one would silently credit Phase 5 with a benchmark fix.)</em></p>
+<h3 id="andthememory">And the memory</h3>
+<p>The acceptance criterion I had written was <em>"peak heap no worse than Phase 4's 23.8 MB."</em></p>
+<p>Measured at 1M, <code>groupBy=none</code>: <strong>109.9 MB.</strong> After a harness fix removing a benchmark fixture that was inflating the live set, plus five other commits: <strong>~60 MB</strong> (two draws: 60.17 and 64.73).</p>
+<p>Missed by 2.5×.</p>
+<p>Phase 4 had held a bucket per <em>record</em>: <code>O(records)</code>, 4.82 MB retained. Phase 5 holds coverage windows per <em>patient-insurance</em>: 83,334 windows at 1M rows, 128 bytes each, 10.7 MB retained. Comparable at 1M, and it stays comparable up the tier ladder. At 5M it's 416,667 windows and 55.3 MB, which is the same 5× that the record count grew.</p>
+<p>The axis that scales worse isn't rows at all, and it took a separate sweep to find. The office-wide coverage read returns every coverage the office owns, <strong>whether that patient visited in the reported month or not</strong>, so Phase 5's heap is linear in the size of the <em>roster</em> where Phase 4's map was linear in the records actually touched. Every tier in the ladder above was seeded with no idle patients, so the ladder looks harmless.</p>
+<p>The doc's own summary:</p>
+<blockquote>
+  <p>Phase 5 costs materially more heap than Phase 4 and its target was set before the coverage map existed.</p>
+</blockquote>
+<p>That last clause is the bit I'd underline. The criterion wasn't missed through sloppiness. It was written for an architecture that Phase 5 then replaced, and nobody went back to renegotiate it.</p>
+<p>The scan path is a smaller version of the same thing. Hoisting the row-scan destinations out of the loop, interning the code strings, and scanning the ids as plain integers cut the report's allocations <strong>16.00 M → 10.00 M at 1M rows</strong> (−38%) and bytes <strong>232.2 → 144.1 MB</strong>. Wall across all three arms: <strong>1.244 / 1.234 / 1.211 s</strong>, flat, inside the noise band, because the measuring box is I/O-bound. The allocation win is proven; the latency win is <em>unproven</em> and only expected at 0.25 vCPU where CPU is scarce. That's recorded as an open question rather than a result.</p>
+<p>(About 6 of the ~10 remaining allocations per row aren't ours: the driver boxes every column into a <code>driver.Value</code> before <code>database/sql</code> ever sees it. That part is a floor nothing in our code can move.)</p>
+<h3 id="thegatethatfired">The gate that fired</h3>
+<p>The office-wide coverage read returns every overlapping coverage the office owns, <strong>including patients who never visited</strong>. Call the ratio of roster patients to visiting patients <em>R</em>. Phase 5's memory is linear in <em>R</em>, and I had pre-written a stop-and-redesign gate at R = 10.</p>
+<p>At 1M rows:</p>
+<table>
+<thead>
+<tr>
+<th>R</th>
+<th>new Phase A</th>
+<th>its peak heap</th>
+<th>the path it replaced</th>
+<th>margin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.0</td>
+<td>206.5 ms</td>
+<td>50.5 MB</td>
+<td>2,509.4 ms</td>
+<td><strong>12.2× faster</strong></td>
+</tr>
+<tr>
+<td>2.5</td>
+<td>688.3 ms</td>
+<td>141.2 MB</td>
+<td>2,641.2 ms</td>
+<td>3.8× faster</td>
+</tr>
+<tr>
+<td>10.0</td>
+<td><strong>4,694.0 ms</strong></td>
+<td><strong>430.4 MB</strong></td>
+<td>2,606.7 ms</td>
+<td><strong>1.80× slower</strong></td>
+</tr>
+</tbody>
+</table>
+<p>At R = 10 the new design is worse than what it replaced on both axes, at a peak heap that has reached the instance's soft limit.</p>
+<p>The sweep ran at two seed sizes, 200k items and 1M, exactly 5× the data. At R = 1 and R = 2.5, Phase A's wall tracks that faithfully (5.1× and 4.6×) and its heap grows 4.0× and 4.5×: linear in the seed, as designed. At R = 10 the wall grows <strong>9.6×</strong>, nearly double the data increase, while the heap grows only <strong>3.0×</strong>.</p>
+<p>R = 10 at 1M is the only cell whose live set reaches the soft limit. When it does, the limit caps the heap and the collector pays the difference in CPU. The sub-linear memory growth and the super-linear time growth are one event seen from two sides.</p>
+<blockquote>
+  <p>at roster ratio 10 the office-wide read reaches 430 MB and becomes 1.8× <em>slower</em> than the path it replaced, because it hits the memory limit and the GC pays the difference</p>
+</blockquote>
+<p>A 12× speed win inverted into a 1.8× loss because it ran out of memory. Past that point the two axes aren't independent at all.</p>
+<p>The super-linearity belongs to <strong>the 512 MB budget</strong>, not to the read shape. It wouldn't show up on a box with headroom, which is what makes it a production finding rather than a benchmark artifact.</p>
+<p>The gate fired. I overrode it rather than clearing it, on one judgment: the product is unreleased, and no office we can currently describe sits anywhere near R = 10. That override is recorded as a risk rather than a pass, with a counter attached (every report now logs its office's R and warns at R ≥ 4.0), and with the caveat that there is no production population yet to point that counter at. An alternative exists. At 1M/R=10 a semi-join matches the office-wide read on wall (3,064 vs 3,166 ms, inside noise) and uses <strong>39.7 MB against 374.8 MB</strong>. At R = 1 and R = 2.5 the office-wide read wins outright (162.8 vs 878.3 ms; 534.4 vs 1,408.2 ms).</p>
+<p>If you write one of these gates, watch for what happened to mine. "Office-wide wins at every R" had been <em>measured</em>, on a 200,000-item seed. At 1M it inverts. A conclusion drawn at one scale had quietly become a premise at another.</p>
+<h3 id="thedialwedidntturn">The dial we didn't turn</h3>
+<p>The insurance resolution had an exchange rate you could buy at. (These three rows come from the pinned-container re-run of the Phase-4-era pre-resolve, not the M2 Pro run above. Same caveat as always about not mixing them.)</p>
+<table>
+<thead>
+<tr>
+<th>strategy</th>
+<th>wall</th>
+<th>peak heap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>all patients in one call</td>
+<td>1.226 s</td>
+<td>174.1 MB</td>
+</tr>
+<tr>
+<td>chunked, 2000</td>
+<td>2.355 s</td>
+<td>20.0 MB</td>
+</tr>
+<tr>
+<td>chunked, 500</td>
+<td>2.356 s</td>
+<td>14.1 MB</td>
+</tr>
+</tbody>
+</table>
+<p>2× faster for 12× the memory. On a 512 MB box that also has to fit a second concurrent report, that's not a purchase you make.</p>
+<p>The bottom two rows are where the money was. The default chunk size was 2000. Dropping it to 500 gives <strong>identical wall time to three decimal places and 30% less peak memory.</strong> The 2000 was buying nothing. Someone picked a round number once, and it had been costing 6 MB of headroom per report ever since.</p>
+<h2 id="whatitactuallydoesontheproductioninstance">What it actually does on the production instance</h2>
+<p>Everything above is 1 vCPU. The instance is a quarter of that, so at the end we measured the real configuration: <code>--cpus=0.25 --memory=512m</code>, <code>GOMAXPROCS=1</code>, three runs averaged, on a realistic fixture: 20 items per record, 90% of patients visiting once a month and 10% twice or more, a 70/20/10 insurance mix, with rows from other clinics, past months, non-visiting insured patients and non-billable record types all mixed in as ballast.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:right;">rows</th>
+<th style="text-align:right;">patients (1 month)</th>
+<th style="text-align:right;"><code>none</code></th>
+<th style="text-align:right;"><code>tag</code></th>
+<th style="text-align:right;"><code>staff</code></th>
+<th style="text-align:right;">peak heap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right;">100k</td>
+<td style="text-align:right;">4,386</td>
+<td style="text-align:right;">0.204 s</td>
+<td style="text-align:right;">0.229 s</td>
+<td style="text-align:right;">0.292 s</td>
+<td style="text-align:right;">10.2 MB</td>
+</tr>
+<tr>
+<td style="text-align:right;">500k</td>
+<td style="text-align:right;">21,930</td>
+<td style="text-align:right;">1.162 s</td>
+<td style="text-align:right;">1.065 s</td>
+<td style="text-align:right;">1.268 s</td>
+<td style="text-align:right;">31.3 MB</td>
+</tr>
+<tr>
+<td style="text-align:right;">1M</td>
+<td style="text-align:right;">43,860</td>
+<td style="text-align:right;">2.198 s</td>
+<td style="text-align:right;">2.233 s</td>
+<td style="text-align:right;">2.702 s</td>
+<td style="text-align:right;">89.7 MB</td>
+</tr>
+<tr>
+<td style="text-align:right;">2M</td>
+<td style="text-align:right;">87,719</td>
+<td style="text-align:right;">4.602 s</td>
+<td style="text-align:right;">4.668 s</td>
+<td style="text-align:right;">5.634 s</td>
+<td style="text-align:right;">161.1 MB</td>
+</tr>
+<tr>
+<td style="text-align:right;">5M</td>
+<td style="text-align:right;">219,298</td>
+<td style="text-align:right;">12.198 s</td>
+<td style="text-align:right;">13.069 s</td>
+<td style="text-align:right;">13.633 s</td>
+<td style="text-align:right;">360.7 MB</td>
+</tr>
+<tr>
+<td style="text-align:right;"><strong>10M</strong></td>
+<td style="text-align:right;"><strong>438,596</strong></td>
+<td style="text-align:right;"><strong>28.602 s</strong></td>
+<td style="text-align:right;"><strong>30.606 s</strong></td>
+<td style="text-align:right;"><strong>37.138 s</strong></td>
+<td style="text-align:right;"><strong>502.2 MB</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The same fixture at 1 vCPU / 8 GB runs 100k in 0.067 s and 10M in 8.696 s, so <strong>the production configuration is consistently 3.0–3.9× slower at every tier.</strong> CPU-bound, uniformly. That's the fifth reversal cashing out: buying CPU is now the cheapest available speedup.</p>
+<p><strong>Memory is not the limit.</strong> At 10M the <code>staff</code> mode was measured separately because running all three modes in one process got the third SIGKILLed. Run alone, it completes at 512 MB, 640 MB, 768 MB and 1 GB, with differences inside repetition variance. Production serves one mode per request. After six weeks of treating heap as the binding constraint, it isn't.</p>
+<p><strong>The gateway is the limit.</strong> At 10M, <code>tag</code> (30.6 s) and <code>staff</code> (37.1 s) exceed the 29-second API Gateway timeout. <code>none</code> (28.6 s) squeaks under.</p>
+<p><strong>The GC bill shows up where the model says it should.</strong> At 10M, peak heap crosses the 460 MiB soft limit, and per-row cost degrades <strong>+43% between 1M and 10M</strong>, from 635 to 911 ms per million rows. Same mechanism as the R = 10 finding: once the limit binds, memory pressure is paid in wall time.</p>
+<p>The table settled a product question too. Someone wanted to raise the maximum report range from 366 days to 1827 (five years). Five years is 60 months, so at 22.8 items per patient-month that's <strong>1,368 rows per patient</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>threshold</th>
+<th style="text-align:right;">rows</th>
+<th style="text-align:right;">max active patients at a 5-year range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>our 3,000 ms perf guardrail</td>
+<td style="text-align:right;">~1.4M</td>
+<td style="text-align:right;"><strong>~1,000</strong></td>
+</tr>
+<tr>
+<td>API Gateway 29 s</td>
+<td style="text-align:right;">~10M</td>
+<td style="text-align:right;">~7,300</td>
+</tr>
+</tbody>
+</table>
+<p>At a one-year range that same 3,000 ms guardrail holds to ~12,000 patients. At five years it holds to about a thousand. Nothing is broken; that's just how much a synchronous response can carry. Going to five years means async, paging, or a per-office guard, and someone on the product side gets to pick, now with a number in front of them.</p>
+<h2 id="keepingitcorrectwhiledoingallthis">Keeping it correct while doing all this</h2>
+<p>None of the above is worth anything if the report's numbers changed.</p>
+<p>Every candidate in every bake-off was gated by a <strong>differential test</strong> asserting data-equal output against the previous implementation before it was allowed to win. Phase 5 shipped with no feature flag and no shadow pass, so that generative differential was, in the plan's words, <em>"what stands between a duplicated rule and a wrong bucket in production."</em> It was hardened accordingly: iterations raised 300 → 500, a self-check added that fails loudly if the seed starves any dimension, and the two paths handed independent shuffled permutations of the same data.</p>
+<p>There's also a mutation-testing step written into the plan: deliberately invert a business rule, re-run, confirm the differential <em>fails</em>:</p>
+<blockquote>
+  <p>A differential that cannot fail is worse than no test, and with no shadow pass this is the only guard.</p>
+</blockquote>
+<p>That turned out to be justified. Follow-up work found two existing tests that <strong>passed under both mutations tried</strong>, one of which could only have detected a regression on the last day of a month between 15:00 and 24:00 UTC, about 1.2% of possible run times.</p>
+<h2 id="apostscriptonthrowingtheharnessaway">A postscript on throwing the harness away</h2>
+<p>The benchmark harness no longer exists. It was added on a branch and deleted on the same branch, six files, once the capacity work was done. It needed a dedicated MySQL and tens of minutes to build a 10M-row fixture; it could never run in CI.</p>
+<p>What got kept is a document with the numbers in it and a recipe for rebuilding the harness if anyone needs to re-measure. Numbers only mean anything with their conditions attached, which is why that document is mostly conditions.</p>
+<p>It carries the ±30% warning from the top of this post, for the same reason: those historical comparison cells are single runs.</p>
+<p>There's one detail in that rebuild recipe I keep telling people about. The original fixture seeder buffered every row in memory before inserting, so at 10M rows it exhausted 12 GB and <strong>inserted nothing at all</strong>. It had to be rewritten to stream its inserts.</p>
+<p>The benchmark that proved the report shouldn't hold all its rows in memory was, itself, holding all its rows in memory.</p>
+<h2 id="whatidtellyou">What I'd tell you</h2>
+<ol>
+<li><strong>Measure your noise floor before you measure anything else.</strong> Run one configuration twice. Whatever spread you get is the smallest effect you're entitled to an opinion about. Mine was 16% while I was making 0.2% decisions, and 1–3% once I fixed it. That alone accounts for two of my five bad conclusions. The other three were a confounded variable, an expired conclusion, and an unchecked extrapolation, none of which more repetitions would have caught.</li>
+<li><strong>Streaming beats buffering on both axes, within a read shape.</strong> Office-wide load-all: 1.290 s, 278.6 MB. Cursor-streamed, same join: 1.169 s, 4.1 MB. When you think you're trading, first check whether you're just materializing something nobody needs.</li>
+<li><strong>Round-trip elimination, though, is bought with memory.</strong> A single streaming pass can't pause to look things up, so everything it needs must be pre-resolved and held. That's why peak heap went 55.7 → 392.6 → 506.5 MB while wall time kept falling. Know which kind of change you're making.</li>
+<li><strong>Make the accumulator <code>O(output)</code>, not <code>O(input)</code>.</strong> Phase 1 dropped 10M-row peak heap 28×, and nothing in four subsequent phases beat it.</li>
+<li><strong>Retained heap and peak heap are different numbers.</strong> Peak samples <code>HeapAlloc</code> without collecting; with <code>GOGC=100</code> it runs near 2× the live set. Force two GCs and measure what survives. Two-thirds of my scariest number was garbage, and scaling the wrong one made a spec wrong by 4×.</li>
+<li><strong>An allocation win is not a latency win.</strong> −24.3% allocations at every tier, to the decimal, next to a wall saving that decayed to −2.1%. Both real, but not the same claim.</li>
+<li><strong>Never extrapolate a failure you haven't observed.</strong> "It OOMs past 1.15M" was a line through three points. It degrades at 394 MB instead. Predicted death and measured degradation call for different responses.</li>
+<li><strong>Change one variable.</strong> A missing index made me write off an entire read shape as fatal, by 26×, and the error survived a month because code and schema were moving together.</li>
+<li><strong>Profile the profiler.</strong> "91% DB-bound" was a timing callback that included the row scan. <code>EXPLAIN ANALYZE</code> said 1.5 s of 5.5 s.</li>
+<li><strong>Re-derive acceptance criteria when the architecture changes.</strong> Phase 5's heap target was set before the structure that blows it existed.</li>
+<li><strong>Check the constants you inherited.</strong> Chunk size 2000 → 500: identical latency, 30% less memory, free.</li>
+<li><strong>Measure the configuration you actually deploy.</strong> Everything looked fine at 1 vCPU. Production is 3.0–3.9× slower, and that only turned up because someone finally pinned a container at 0.25.</li>
+<li><strong>Write down the miss.</strong> Every number here that embarrasses me is in a design doc with its conditions attached. That's the only reason I could re-measure it and find out I was wrong.</li>
+</ol>
+<p>Going in, I expected to spend the project turning a dial between fast and small. Most of the time the dial wasn't connected to anything: the memory was being spent on work nobody needed, and deleting that work made things faster for free. Where it did connect, I turned it toward memory four times on purpose, because killing a round trip was worth more than the heap it cost. And at R = 10 and ten million rows it stopped being a dial at all. The heap filled up, the collector started charging for it, and the pressure came back as latency.</p>
+<p>Measure your noise floor first. And go look at whatever chunk size someone typed in two years ago.</p>
+<h2 id="references">References</h2>
+<p><strong>Go</strong></p>
+<ul>
+<li><a href="https://pkg.go.dev/database/sql"><code>database/sql</code></a>: <a href="https://pkg.go.dev/database/sql#DB.Query"><code>DB.Query</code></a> + <a href="https://pkg.go.dev/database/sql#Rows.Next"><code>Rows.Next</code></a>, the cursor iteration a streamed join needs</li>
+<li><a href="https://pkg.go.dev/runtime/debug#SetMemoryLimit"><code>runtime/debug.SetMemoryLimit</code></a>: the soft limit used to model the production instance inside the timed section</li>
+<li><a href="https://pkg.go.dev/runtime#ReadMemStats"><code>runtime.ReadMemStats</code></a> and <a href="https://pkg.go.dev/runtime#KeepAlive"><code>runtime.KeepAlive</code></a>: the retained-heap probe</li>
+<li><a href="https://tip.golang.org/doc/gc-guide">A Guide to the Go Garbage Collector</a>: the <code>GOGC</code> pacing that makes a sampled peak ≈ 2× the live set</li>
+<li><a href="https://pkg.go.dev/testing#hdr-Benchmarks"><code>testing</code>: benchmarks</a>, <a href="https://pkg.go.dev/testing#B.ReportMetric"><code>B.ReportMetric</code></a>, and <a href="https://pkg.go.dev/golang.org/x/perf/cmd/benchstat"><code>benchstat</code></a>: custom metrics, and the "is this bigger than noise" question</li>
+<li><a href="https://pkg.go.dev/runtime/pprof"><code>runtime/pprof</code></a>: heap profiles, and <code>-base</code> for attributing a diff</li>
+</ul>
+<p><strong>MySQL</strong></p>
+<ul>
+<li><a href="https://dev.mysql.com/doc/refman/8.0/en/explain.html#explain-analyze"><code>EXPLAIN ANALYZE</code></a>: how "91% DB-bound" and "aggregate using temporary table" were settled</li>
+<li><a href="https://dev.mysql.com/doc/refman/8.0/en/analyze-table.html"><code>ANALYZE TABLE</code></a>: optimizer statistics, which flipped a plan mid-investigation</li>
+<li><a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-buffer-pool.html">InnoDB buffer pool</a>: why every benchmark arm needs a discarded warm-up run</li>
+</ul>
+<p><strong>Containers</strong></p>
+<ul>
+<li><a href="https://docs.docker.com/engine/containers/resource_constraints/">Docker resource constraints</a>: <code>--cpus</code> and <code>--memory</code>, for measuring against the instance you actually deploy to</li>
+</ul>
+<p><strong>Related posts</strong></p>
+<ul>
+<li><a href="/migrating-billing-rails-to-go">Migrating a billing system from Rails to Go</a></li>
+<li><a href="/dual-writes-and-the-strangler-fig">Dual writes and the strangler fig</a></li>
+<li><a href="/mysql-transactions-silent-rollback">MySQL transactions — same Go pattern, different ways to lose</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

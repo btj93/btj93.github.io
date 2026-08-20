@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Saga and the Outbox — orchestrating multi-step writes without 2PC</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2026-03-15">Sun, March 15, 2026</time>
+        <h1 class="mar-b-7">Saga and the Outbox — orchestrating multi-step writes without 2PC</h1>
+    </header>
+    <h1 id="sagaandtheoutboxorchestratingmultistepwriteswithout2pc">Saga and the Outbox — orchestrating multi-step writes without 2PC</h1>
+<p>A while back I wrote about <a href="/idempotency-keys-deduped-writes">idempotency keys</a>, which solve one specific problem: a client retried a write because they didn't know whether the first one landed. That post punted on the harder cousin of the problem, <strong>doing several writes, across several systems, atomically.</strong></p>
+<p>This is that post. It's about why "just use two-phase commit" is rarely the answer, what people actually do instead (the Outbox pattern and the Saga pattern), and how the two compose. I've been thinking about this a lot recently because I keep running into the same shape: a request that needs to update my database <em>and</em> send something to an external system (a queue, an email service, a webhook). I want both, or neither, and I want the system to recover sanely if one of them fails.</p>
+<h2 id="theshapeoftheproblem">The shape of the problem</h2>
+<p>Concretely: you accept an HTTP request to create an order. To do this you need to:</p>
+<ol>
+<li>Insert a row into the <code>orders</code> table.</li>
+<li>Decrement stock in the <code>inventory</code> table.</li>
+<li>Publish an <code>order_created</code> event to a message queue (so the warehouse service can ship it).</li>
+<li>Send a confirmation email to the customer.</li>
+</ol>
+<p>If step (1) and (2) live in the same database, you can wrap them in a <code>BEGIN ... COMMIT</code> block and they're atomic with respect to each other. Fine.</p>
+<p>But (3) and (4) talk to systems <em>outside</em> your database. The queue doesn't know about your transaction. The email service definitely doesn't.</p>
+<ul>
+<li>The database commits, then the process crashes before publishing. Your <code>orders</code> table has a row, but the warehouse never hears about it.</li>
+<li>You publish to the queue first, <em>then</em> try to commit the database, and the commit fails. Now the warehouse is preparing to ship an order that doesn't exist.</li>
+<li>You succeed at the database and the queue but the email send returns a 500. You retry the whole flow and now there are two orders.</li>
+</ul>
+<p>Each of these is a real outage waiting to happen, and the moment your business has any real volume, all three will happen monthly.</p>
+<h2 id="whypeoplesayjustuse2pcandwhyidisagree">Why people say "just use 2PC" and why I disagree</h2>
+<p>The classical computer-science answer is <a href="https://en.wikipedia.org/wiki/Two-phase_commit_protocol">two-phase commit</a>: have a transaction coordinator prepare all the resource managers, then either commit them all or roll them all back.</p>
+<p>Why it's a tempting answer:</p>
+<ul>
+<li>It's conceptually clean. One protocol, atomic across heterogeneous systems.</li>
+<li>The XA spec exists. JTA implements it. Postgres has prepared transactions. You can do this.</li>
+</ul>
+<p>Why it's almost never the right answer in practice:</p>
+<ul>
+<li><strong>Most of the systems you want to participate in 2PC don't support it.</strong> Your email provider's REST API has no concept of "prepare". Your message broker probably doesn't either (Kafka especially does not). 2PC is only available when every participant implements the protocol.</li>
+<li><strong>It's blocking.</strong> Resources held in the "prepared" state lock rows. If the coordinator goes down between prepare and commit, those locks can hang for an embarrassingly long time. (Search for "in-doubt transactions" if you want to ruin your weekend.)</li>
+<li><strong>It assumes a synchronous, trusted network.</strong> Latency and partitions are the operating conditions.</li>
+</ul>
+<p>So 2PC goes to the bottom of the toolbox.</p>
+<h2 id="theoutboxpatternsolvethedatabasequeueboundary">The Outbox pattern: solve the database/queue boundary</h2>
+<p>The <a href="https://microservices.io/patterns/data/transactional-outbox.html">Outbox pattern</a> fixes one specific subset of the problem: <strong>"I need to write to my database AND publish a message, atomically."</strong></p>
+<p>The trick is simple. Instead of writing to the database <em>and</em> publishing, you write <em>both into the database</em>:</p>
+<pre><code>BEGIN;
+  INSERT INTO orders (...) VALUES (...);
+  INSERT INTO outbox (
+      id, aggregate_type, aggregate_id, event_type, payload, created_at
+  ) VALUES (
+      gen_random_uuid(), 'order', :order_id, 'order_created', :payload, now()
+  );
+COMMIT;
+</code></pre>
+<p>A separate process (call it the outbox relay) reads from the <code>outbox</code> table and publishes each row to the queue. After a successful publish, it marks the row as sent (or deletes it).</p>
+<p>Now your atomic unit is the database transaction, and the database is something you already trust to be atomic. The queue receives a message <em>if and only if</em> the order was written.</p>
+<p>A few things this pattern needs to get right:</p>
+<ol>
+<li><strong>At-least-once delivery.</strong> The relay can crash after publishing but before marking the row sent. It'll publish the same row again. Consumers must be idempotent. (Hi, idempotency keys.)</li>
+<li><strong>Order preservation.</strong> If you care about the order in which events are published per aggregate, the relay must read in <code>created_at</code> order <em>per</em> <code>aggregate_id</code>. Don't trust insertion order across aggregates.</li>
+<li><strong>Backpressure.</strong> A burst of orders writes a burst of outbox rows. The relay needs to keep up; if it falls behind, lag grows. Monitor outbox table size.</li>
+<li><strong>Garbage collection.</strong> Don't grow the outbox table forever. Either delete sent rows or move them to a cold archive.</li>
+</ol>
+<p>The implementation can be simple. The first one I wrote in production was a goroutine that did <a href="https://www.postgresql.org/docs/current/sql-select.html"><code>SELECT ... FOR UPDATE SKIP LOCKED</code></a> <code>LIMIT 100 WHERE sent_at IS NULL</code>, published each row, then <code>UPDATE ... SET sent_at = now()</code>. With a single instance running you get a stream of events with the same atomicity as the database itself.</p>
+<p>For higher throughput you can move to log-based delivery: let a CDC tool (<a href="https://github.com/debezium/debezium">Debezium</a>, etc.) read the database WAL and publish for you. Same idea, more plumbing.</p>
+<h2 id="thesagapatternsolvethecrossserviceboundary">The Saga pattern: solve the cross-service boundary</h2>
+<p>The Outbox is great when the second step is "publish a message". It's silent on the harder case: <strong>"I need to do two business operations across two services, and if the second one fails I need to undo the first."</strong></p>
+<p>For that, you reach for <a href="https://microservices.io/patterns/data/saga.html">sagas</a>.</p>
+<p>A saga is a sequence of <em>local</em> transactions, each in its own service or database, with a <em>compensating action</em> defined for each step. If step N fails, you run the compensations for N-1, N-2, … back to 1. There's no global transaction; instead there's a defined recovery procedure.</p>
+<p>For the order example, a saga might look like:</p>
+<pre><code>Step 1: Reserve inventory.
+  Forward:    UPDATE inventory SET reserved = reserved + qty WHERE ...
+  Compensate: UPDATE inventory SET reserved = reserved - qty WHERE ...
+
+Step 2: Charge payment.
+  Forward:    POST /payments {amount, customer_id}
+  Compensate: POST /payments/{id}/refund
+
+Step 3: Create order.
+  Forward:    INSERT INTO orders (...) VALUES (...)
+  Compensate: UPDATE orders SET status = 'cancelled' WHERE id = ...
+
+Step 4: Send confirmation email.
+  Forward:    POST /emails {to, template, data}
+  Compensate: POST /emails {to, template: 'order_cancelled', data}
+</code></pre>
+<p>There are two orchestration styles:</p>
+<ul>
+<li><strong>Orchestration.</strong> A central service knows the whole sequence and drives it step by step. Easy to read, easy to test, easy to debug. Bad when the central service becomes a bottleneck or a single point of failure.</li>
+<li><strong>Choreography.</strong> Each service publishes events; other services listen and react. No central coordinator. More resilient to a single service going down. <em>Way</em> harder to reason about, because the saga's structure is only visible if you map who listens to what.</li>
+</ul>
+<p>I default to orchestration unless I have a specific reason not to. Reading a saga as a sequence of <code>do/undo</code> pairs in one file is much easier than tracing it across seven event handlers.</p>
+<h2 id="compensationsarenotrollbacks">Compensations are not rollbacks</h2>
+<p>Rollbacks pretend the operation never happened. Compensations <em>acknowledge that it did</em> and apply a counter-operation. The difference matters:</p>
+<ul>
+<li>A refund is not the absence of a charge. The customer's statement will show <em>both</em> the charge and the refund. (This is fine, it's how the world works.)</li>
+<li>A "cancel email" is sent <em>after</em> the confirmation email. The customer sees both.</li>
+<li>An unreserve of inventory after a reserve is fine <em>if no one else reserved the same units in between</em>. If they did, you may have temporarily oversold, and you have to deal with it at the application level.</li>
+</ul>
+<p>Designing compensations is harder than it sounds, and a lot of sagas get this wrong by assuming the world stayed still between step N and the compensation of step N.</p>
+<h2 id="howthetwocompose">How the two compose</h2>
+<p>The Outbox and the Saga sit at different layers of the stack:</p>
+<ul>
+<li><strong>Outbox</strong> solves "this service's database write and this service's published event must be atomic." It's a single-service pattern.</li>
+<li><strong>Saga</strong> solves "these operations across multiple services must either all succeed or be compensated." It's a multi-service pattern.</li>
+</ul>
+<p>In a system that does both, the picture looks like this:</p>
+<pre><code>   ┌──── Order Service ─────────────┐
+   │  BEGIN                         │
+   │    INSERT orders ...           │
+   │    INSERT outbox (saga_start)  │
+   │  COMMIT                        │
+   └─────────────┬──────────────────┘
+                 │ (outbox relay)
+                 ▼
+            ┌──────────┐
+            │ Message  │
+            │  Broker  │
+            └────┬─────┘
+                 │
+         ┌───────┴────────┐
+         ▼                ▼
+   ┌───────────┐    ┌──────────────┐
+   │ Inventory │    │   Payment    │
+   │  Service  │    │   Service    │
+   └─────┬─────┘    └──────┬───────┘
+         │                 │
+         │  (each writes   │
+         │   to its own    │
+         │   outbox on     │
+         │   completion)   │
+         ▼                 ▼
+</code></pre>
+<p>Each service uses the outbox pattern internally to publish its step's result. The saga's structure lives in the orchestrator (or, in choreography, in the choice of who listens to what). Compensations follow the same publish path as forward steps.</p>
+<h2 id="whyikeepcomingbacktothese">Why I keep coming back to these</h2>
+<p>In practice the <em>distributed</em> part of distributed systems is a small minority of the code, but it's almost all of the operational pain. The code that does the actual business logic (placing the order, charging the card) is straightforward. The code that handles "what if the email service was down for 12 seconds" is the code that wakes you up at 3am.</p>
+<p>Outbox and saga, together, give you a vocabulary and a structure for that part of the system. You don't need 2PC. You need:</p>
+<ul>
+<li>Local transactions that are <em>truly</em> atomic (i.e. one database).</li>
+<li>Idempotent consumers (so retries are safe).</li>
+<li>A clear, testable list of compensations for each step.</li>
+<li>Observability into the saga state (where in the sequence are we? are any sagas stuck?).</li>
+</ul>
+<p>Get those right and most of the multi-system writes you ever do are tractable.</p>
+<p>The next time I hit "I need to update my DB and call an external API atomically" I'll be writing an outbox table instead of looking for an XA driver.</p>
+<p>Happy committing.</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://microservices.io/patterns/data/saga.html">Saga pattern (microservices.io)</a></li>
+<li><a href="https://microservices.io/patterns/data/transactional-outbox.html">Transactional outbox pattern (microservices.io)</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Two-phase_commit_protocol">Two-phase commit protocol — Wikipedia</a></li>
+<li><a href="https://github.com/debezium/debezium">Debezium</a>, change-data-capture for relational databases</li>
+<li><a href="https://www.postgresql.org/docs/current/sql-select.html">PostgreSQL <code>SELECT ... FOR UPDATE SKIP LOCKED</code></a>, the locking clause</li>
+<li>Related: <a href="/idempotency-keys-deduped-writes">Idempotency keys</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

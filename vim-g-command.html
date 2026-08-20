@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Mastering the global Command in Vim</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-05-10">Sat, May 10, 2025</time>
+        <h1 class="mar-b-7">Mastering the global Command in Vim</h1>
+    </header>
+    <h1 id="masteringtheglobalcommandinvim">Mastering the global Command in Vim</h1>
+<p>The <code>global</code> command in Vim runs a command on every line that matches a pattern.</p>
+<p>The <code>global</code> command has the following syntax:</p>
+<pre><code>:g/pattern/command
+</code></pre>
+<p>You can use it for substitutions, deletions, and other actions.</p>
+<h2 id="basicsyntax">Basic Syntax</h2>
+<p>The basic syntax of the <code>global</code> command is as follows:</p>
+<pre><code>:g/pattern/command
+</code></pre>
+<ul>
+<li><code>:g</code> indicates that you are using the <code>global</code> command.</li>
+<li><code>pattern</code> is the text you want to search for.</li>
+<li><code>command</code> is the action you want to perform on the matching lines.</li>
+</ul>
+<h3 id="example">Example</h3>
+<p>To delete all lines containing the word "error", you would use:</p>
+<pre><code>:g/error/d
+</code></pre>
+<p>This command will remove all lines that match the pattern "error" from the current buffer.</p>
+<h2 id="viewinggrepresults">Viewing Grep Results</h2>
+<p>After running a <code>global</code> command, you can see the results directly in the buffer. You can also combine it with other Vim commands to act on the matching lines.</p>
+<h2 id="chainingcommandswithglobalandsubstitute">Chaining Commands with Global and Substitute</h2>
+<p>It is not a coincidence that the <a href="https://btj93.github.io/nvim-substitute-command">last post</a> is about another command in vim.</p>
+<p>Vim lets you chain commands together. You can use the <code>global</code> command with the <code>substitute</code> command to find and replace text across all matching lines.</p>
+<h3 id="grepandsubstitutesynergy">Grep and substitute synergy</h3>
+<p>Suppose you want to find all lines that has the word "foo" in your file and replace the whole line with "bar". You can do this in one command:</p>
+<pre><code>:g/foo/s/.*/bar/g
+</code></pre>
+<p>This is particularly useful when you want to have the condition and the replacement string be different.</p>
+<ul>
+<li><code>:g</code> is the command to execute on all lines that match the pattern.</li>
+<li><code>foo</code> searches for the lines that contains the word "foo".</li>
+<li><code>s/.*/bar/g</code> is the command to execute on the lines that match the pattern.</li>
+<li><code>.*</code> matches any character</li>
+<li><code>bar</code> is the replacement string</li>
+</ul>
+<h3 id="realworldexample">Real world example</h3>
+<p>This example is based on a <a href="https://www.reddit.com/r/neovim/comments/1jy5gyf/how_would_you_go_about_editing_this/">reddit post</a>.</p>
+<p>initial text:</p>
+<pre><code>line of code 1
+# comment 1
+line of code 2
+# comment 2
+line of code 3
+# comment 3
+</code></pre>
+<p>result:</p>
+<pre><code>line of code 1
+line of code 2
+line of code 3
+# comment 1
+# comment 2
+# comment 3
+</code></pre>
+<h4 id="solution1">Solution 1</h4>
+<p>With the <code>global</code> command, we can use the following command:</p>
+<pre><code>:g/#/m$
+</code></pre>
+<ul>
+<li><code>g</code> is the command to execute on all lines that match the pattern.</li>
+<li><code>#</code> searches for the lines that contains the <code>#</code> character.</li>
+<li><code>m$</code> is the command to execute on the lines that match the pattern. In this case, it moves the line to the end of the file, denoted by <code>$</code>.</li>
+</ul>
+<h4 id="solution2">Solution 2</h4>
+<p>Another solution is to use this command:</p>
+<pre><code>:g/^#/norm ddGp
+</code></pre>
+<ul>
+<li><code>g</code> is the command to execute on all lines that match the pattern.</li>
+<li><code>^#</code> searches for the lines that starts with <code>#</code>.</li>
+<li><code>norm ddGp</code> is the command to execute on the lines that match the pattern.</li>
+<li><code>norm</code> executes a normal mode command</li>
+<li><code>dd</code> deletes the line</li>
+<li><code>G</code> moves the cursor to the end of the file.</li>
+<li><code>p</code> pastes the deleted line below the current line.</li>
+</ul>
+<p>In this solution, <code>norm</code> lets us execute a normal mode keymap, so we can use normal mode keymaps to process the line.</p>
+<h2 id="advancedglobaloptions">Advanced global Options</h2>
+<p>The <code>global</code> command also supports several options to refine your actions:</p>
+<ul>
+<li><code>!</code>: Negate the pattern, applying the command to lines that do not match the pattern.</li>
+<li><code>c</code>: Confirm each action before it is executed.</li>
+</ul>
+<p>You can use these options to customize how the <code>global</code> command behaves. For example, to confirm each substitution, you can use:</p>
+<pre><code>:g/foo/s//bar/gc
+</code></pre>
+<h2 id="conclusion">Conclusion</h2>
+<p>The <code>global</code> command runs an action on every line that matches a pattern. Chaining it with the <code>substitute</code> command lets you find and replace across those lines.</p>
+<p>Happy editing!</p>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

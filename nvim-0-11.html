@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Neovim 0.11 Released! 🎉 Why should you upgrade from an old version?</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-03-30">Sun, March 30, 2025</time>
+        <h1 class="mar-b-7">Neovim 0.11 Released! 🎉 Why should you upgrade from an old version?</h1>
+    </header>
+    <h1 id="whatsnewinneovim011">What's new in Neovim 0.11</h1>
+<p>Neovim 0.11 is packed with exciting new features and bug fixes. For the complete list of changes, see:
+<a href="https://neovim.io/doc/user/news-0.11.html">https://neovim.io/doc/user/news-0.11.html</a></p>
+<p>Take a look at the milestone to admire all the contributions made by the community:
+<a href="https://github.com/neovim/neovim/milestone/41">https://github.com/neovim/neovim/milestone/41</a></p>
+<p><strong>Here are some of the highlights:</strong></p>
+<h2 id="treesitter">Treesitter</h2>
+<p>Many treesitter performance improvements have been merged and released in 0.11. Providing a huge boost to user experience when working with large files.</p>
+<ul>
+<li><p><a href="https://github.com/neovim/neovim/pull/31631"><strong>Async parsing</strong></a>: Treesitter now supports asynchronous parsing, which no longer blocks the UI when parsing large files.</p></li>
+<li><p><a href="https://github.com/neovim/neovim/pull/32000"><strong>Non-blocking injection query</strong></a>: Treesitter now supports non-blocking injection queries, which can be used to improve performance when working / editing with large files.</p></li>
+<li><p><a href="https://github.com/neovim/neovim/pull/31827">Asnyc folding</a>: Treesitter now supports asynchronous folding, which no longer blocks the UI when folding a large chunk of code.</p></li>
+</ul>
+<h2 id="gxfixed">gx fixed</h2>
+<p>The default <a href="https://neovim.io/doc/user/various.html#gx"><code>gx</code></a> keymap in neovim opens a filepath or URL under the cursor.</p>
+<p>Previously, if you try to <code>gx</code> an URL on markdown files, you should find out that it doesn't work if your cursor is on the link text.</p>
+<pre><code>[...](https://...)
+  ^
+</code></pre>
+<blockquote>
+  <p>⚠️ <em>Spoiler alert: it doesn't work</em> 🫠</p>
+</blockquote>
+<p>With this fixed, you can now <code>gx</code> on anywhere in the link text!</p>
+<p>Check out the <a href="https://github.com/neovim/neovim/pull/28630">PR</a> for more details.</p>
+<h3 id="bonustips">Bonus tips</h3>
+<p>Check this plugin out for enhanced <code>gx</code> functionality, including:</p>
+<ul>
+<li><code>gx</code> with your cursor on top of a plugin name to open the plugin github page in the browser</li>
+<li>the word/selection is automatically searched on the web, if there is no url found under the cursor</li>
+</ul>
+<div class="gh-card gh-large" data-repo="chrishrb/gx.nvim"></div>
+<h2 id="builtinautocompletion">Builtin auto-completion</h2>
+<p>Another long-awaited feature from Neovim 0.11 is the builtin auto-completion.</p>
+<p>You can now try the following autocmd snippet to see the auto-completion in action:</p>
+<pre><code class="lua language-lua">vim.api.nvim_create_autocmd('LspAttach', {
+  callback = function(event)
+    local client = vim.lsp.get_client_by_id(event.data.client_id)
+    if client:supports_method('textDocument/completion') then
+      vim.lsp.completion.enable(true, client.id, event.buf, { autotrigger = true })
+    end
+  end,
+})
+</code></pre>
+<p>With <a href="https://github.com/neovim/neovim/issues/20451">Neovim approaching 1.0</a>, this is definitely a step in the right direction.</p>
+<p>I'm excited to see more new vimmers onboarding with all these new features that makes Neovim a more powerful and enjoyable editor!</p>
+<h3 id="imalreadyusingnvimcmporblinkcmpshouldiswitch">I'm already using nvim-cmp or blink.cmp, should I switch?</h3>
+<div class="github-card" data-github="hrsh7th/nvim-cmp" data-width="400" data-height="" data-theme="default"></div>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+<div class="gh-card gh-large" data-repo="Saghen/blink.cmp"></div>
+<div class="github-card" data-github="" data-width="400" data-height="" data-theme="default"></div>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+<p>With blink.cmp 1.0 recently released, quite a few people have already switched from nvim-cmp to it.</p>
+<p>The new built-in auto-completion is still missing some customization options and supports for snippets, so if you are currently using nvim-cmp or blink.cmp with heavy configurations, maybe you should wait it out.</p>
+<p>I'm personally using blink.cmp with some heavy customization, so I have kept using blink.cmp on neovim 0.11, secretly hoping that maybe one day the builtin auto completion will be able to replace blink.cmp.</p>
+<p>I know how time-consuming it is to tinker with the config <em>(I have spent countless hours and hours on it…)</em>. So if your life is happy with whatever completion plugin you are current using, feel free to not worry about it.</p>
+<p><img src="https://btj93.github.io/nvim-0-11/if_it_works_it_works.png" alt="If it works, it works" /></p>
+<blockquote>
+  <p><a href="https://www.reddit.com/r/ProgrammerHumor/comments/w6ysl9/if_it_works_it_works/">Source</a></p>
+</blockquote>
+<h2 id="diagnosticvirtuallines">Diagnostic virtual lines</h2>
+<p>If you are using the builtin diagnostic virtual text, note that it is now disabled by default. It must now be opt-ed in manually with</p>
+<pre><code class="lua language-lua">vim.diagnostic.config({ virtual_text = true })
+</code></pre>
+<p>If you are looking at a more fancy diagnostic, you can try out the new diagnostic vistual lines feature.</p>
+<p>This is inspired by a plugin made by whynothugo called <a href="https://sr.ht/~whynothugo/lsp_lines.nvim/">lsp_lines.nvim</a>. Which in turns <em>might</em> be inspired by the helix editor.</p>
+<p>It offers more features such as pin-pointing the position of error, and showing multiple errors on the same line.</p>
+<h3 id="doublediagnostictext">Double diagnostic text</h3>
+<p>If you are experiencing double diagnostic message showing up, try disabling <code>nvim-lspconfig</code> virtual text.</p>
+<pre><code class="lua language-lua">return {
+  "neovim/nvim-lspconfig",
+  opts = {
+    diagnostics = {
+      virtual_text = false,
+    },
+  },
+}
+</code></pre>
+<h3 id="virtuallinesforerrorsandvirtualtextforwarnings">Virtual lines for errors and virtual text for warnings</h3>
+<pre><code class="lua language-lua">vim.diagnostic.config({
+  virtual_text = {
+    severity = {
+      max = vim.diagnostic.severity.WARN,
+    },
+  },
+  virtual_lines = {
+    severity = {
+      min = vim.diagnostic.severity.ERROR,
+    },
+  },
+})
+</code></pre>
+<blockquote>
+  <p><a href="https://www.reddit.com/r/neovim/comments/1jo9oe9/i_set_up_my_config_to_use_virtual_lines_for">Source</a></p>
+</blockquote>
+<h3 id="togglediagnosticvirtuallinesandvirtualtext">Toggle diagnostic virtual lines and virtual text</h3>
+<pre><code class="lua language-lua">vim.keymap.set('n', '&lt;leader&gt;tdd', function()
+    vim.diagnostic.config {
+        virtual_lines = not vim.diagnostic.config().virtual_lines,
+        virtual_text = not vim.diagnostic.config().virtual_text,
+     }
+end, { desc = 'Toggle diagnostic virtual lines and virtual text' })
+</code></pre>
+<blockquote>
+  <p><a href="https://www.reddit.com/r/neovim/comments/1jo9oe9/comment/mkti11p/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button">Source</a></p>
+</blockquote>
+<h3 id="showvirtuallinesonlyonthecursorline">Show virtual lines only on the cursor line</h3>
+<p>The following snippets will show virtual lines only on the cursor line. Otherwise, it will show the diagnostics as vistual text.</p>
+<pre><code class="lua language-lua">vim.diagnostic.config({
+  virtual_text = true,
+  virtual_lines = { current_line = true },
+  underline = true,
+  update_in_insert = false
+})
+</code></pre>
+<p>Pair it with the autocmd:</p>
+<pre><code class="lua language-lua">local og_virt_text
+local og_virt_line
+vim.api.nvim_create_autocmd({ 'CursorMoved', 'DiagnosticChanged' }, {
+  group = vim.api.nvim_create_augroup('diagnostic_only_virtlines', {}),
+  callback = function()
+    if og_virt_line == nil then
+      og_virt_line = vim.diagnostic.config().virtual_lines
+    end
+
+    -- ignore if virtual_lines.current_line is disabled
+    if not (og_virt_line and og_virt_line.current_line) then
+      if og_virt_text then
+        vim.diagnostic.config({ virtual_text = og_virt_text })
+        og_virt_text = nil
+      end
+      return
+    end
+
+    if og_virt_text == nil then
+      og_virt_text = vim.diagnostic.config().virtual_text
+    end
+
+    local lnum = vim.api.nvim_win_get_cursor(0)[1] - 1
+
+    if vim.tbl_isempty(vim.diagnostic.get(0, { lnum = lnum })) then
+      vim.diagnostic.config({ virtual_text = og_virt_text })
+    else
+      vim.diagnostic.config({ virtual_text = false })
+    end
+  end
+})
+</code></pre>
+<blockquote>
+  <p><a href="https://www.reddit.com/r/neovim/comments/1jpbc7s/disable_virtual_text_if_there_is_diagnostic_in/">Source</a></p>
+</blockquote>
+<h2 id="defaultkeymaps">Default keymaps</h2>
+<p>Mappings inspired by Tim Pope's vim-unimpaired:</p>
+<ul>
+<li><code>[q</code>, <code>]q</code>, <code>[Q</code>, <code>]Q</code>, <code>[CTRL-Q</code>, <code>]CTRL-Q</code> navigate through the quickfix list</li>
+<li><code>[l</code>, <code>]l</code>, <code>[L</code>, <code>]L</code>, <code>[CTRL-L</code>, <code>]CTRL-L</code> navigate through the location-list</li>
+<li><code>[t</code>, <code>]t</code>, <code>[T</code>, <code>]T</code>, <code>[CTRL-T</code>, <code>]CTRL-T</code> navigate through the tag-matchlist</li>
+<li><code>[a</code>, <code>]a</code>, <code>[A</code>, <code>]A</code> navigate through the argument-list</li>
+<li><code>[b</code>, <code>]b</code>, <code>[B</code>, <code>]B</code> navigate through the buffer-list</li>
+<li><code>[&lt;Space&gt;</code>, <code>]&lt;Space&gt;</code> add an empty line above and below the cursor</li>
+<li><code>[[</code> and <code>]]</code> in Normal mode jump between shell prompts for shells which emit OSC 133 sequences ("shell integration" or "semantic prompts").</li>
+</ul>
+<h1 id="shouldyouupgrade">Should you upgrade?</h1>
+<p><strong>I would recommend upgrading to 0.11 for the treesitter improvements alone.</strong></p>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

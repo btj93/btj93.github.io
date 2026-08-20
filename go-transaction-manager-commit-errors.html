@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>The Go transaction manager bug that ate my rollback</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-06-15">Sun, June 15, 2025</time>
+        <h1 class="mar-b-7">The Go transaction manager bug that ate my rollback</h1>
+    </header>
+    <h1 id="thegotransactionmanagerbugthatatemyrollback">The Go transaction manager bug that ate my rollback</h1>
+<p>I've been writing Go for a while now, and like every other Go shop on earth, somewhere in the codebase there is a function called something like <code>WithTx</code>, <code>RunInTx</code>, or <code>TransactionManager.Execute</code>. It opens a transaction, runs a callback, and commits at the end.</p>
+<p>This post is about a subtle bug I shipped in my own implementation of the pattern. Everything looks correct, every test passes, and yet under specific failure modes the transaction silently leaks.</p>
+<h2 id="theshapeofthepattern">The shape of the pattern</h2>
+<p>The shape I'm going to talk about looks like this:</p>
+<pre><code class="go language-go">type TxManager interface {
+    Do(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+type txManager struct {
+    db *sql.DB
+}
+
+func (m *txManager) Do(ctx context.Context, fn func(ctx context.Context) error) error {
+    tx, err := m.db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+
+    ctx = ctxWithTx(ctx, tx)
+
+    if err := fn(ctx); err != nil {
+        _ = tx.Rollback()
+        return err
+    }
+
+    return tx.Commit()
+}
+</code></pre>
+<p>The idea is straightforward. A repository looks up the transaction from <code>ctx</code>, and if one is there, it uses it. If not, it falls back to the bare <code>*sql.DB</code>. The caller orchestrates a usecase:</p>
+<pre><code class="go language-go">err := tx.Do(ctx, func(ctx context.Context) error {
+    if err := repo.SaveOrder(ctx, order); err != nil {
+        return err
+    }
+    if err := repo.DeductStock(ctx, order.Items); err != nil {
+        return err
+    }
+    return nil
+})
+</code></pre>
+<p>Now where's the bug?</p>
+<h2 id="thebugacommitcanfailtoo">The bug: a commit can fail too</h2>
+<pre><code class="go language-go">return tx.Commit()
+</code></pre>
+<p>If <code>tx.Commit()</code> returns an error, what happens? The function returns the error. Good. But what state is the transaction left in?</p>
+<p>In Postgres, a <code>COMMIT</code> that fails (for example, due to a <a href="https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE">serialization failure under SERIALIZABLE</a>, a <a href="https://www.postgresql.org/docs/current/sql-set-constraints.html">deferred constraint</a>, or a network blip mid-flush) leaves the transaction <em>closed</em> on the database side. The client-side <code>*sql.Tx</code> is also done, so calling <code>Rollback()</code> on it after a failed commit just returns <a href="https://pkg.go.dev/database/sql#pkg-variables"><code>sql.ErrTxDone</code></a>. So far, nothing leaks.</p>
+<p>The bug is at the <em>caller</em>.</p>
+<p>The caller wraps <code>tx.Do</code> like this:</p>
+<pre><code class="go language-go">err := txManager.Do(ctx, func(ctx context.Context) error {
+    // ... some work ...
+    return nil
+})
+if err != nil {
+    log.Error("transaction failed", "err", err)
+    // assume the side effects didn't happen
+    return err
+}
+
+// commit succeeded, do follow-up side effects
+publishEvent(...)
+</code></pre>
+<p>Now imagine <code>fn</code> returned <code>nil</code>, but <code>tx.Commit()</code> returned an error. From the caller's point of view, they get an error back from <code>txManager.Do</code>. That's correct, but they don't know <strong>whether the failure was inside <code>fn</code> (no rows written) or inside <code>Commit</code> (rows possibly written, or possibly not, depending on where in the commit pipeline the error happened)</strong>.</p>
+<p>That ambiguity is the bug.</p>
+<h2 id="howthebugbitme">How the bug bit me</h2>
+<p>My original implementation looked roughly like this:</p>
+<pre><code class="go language-go">func (m *txManager) Do(ctx context.Context, fn func(ctx context.Context) error) error {
+    tx, err := m.db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+    defer func() {
+        if r := recover(); r != nil {
+            _ = tx.Rollback()
+            panic(r)
+        }
+    }()
+
+    if err := fn(ctxWithTx(ctx, tx)); err != nil {
+        _ = tx.Rollback()
+        return err
+    }
+
+    if err := tx.Commit(); err != nil {
+        _ = tx.Rollback() // (1) no-op, returns ErrTxDone
+        return err        // (2) caller can't tell why this errored
+    }
+    return nil
+}
+</code></pre>
+<ol>
+<li>The <code>tx.Rollback()</code> after a failed <code>Commit()</code> does nothing useful, and the swallowed <code>sql.ErrTxDone</code> made it look like I was handling things when I wasn't.</li>
+<li>The error returned is just <code>err</code>, so there's no way for the caller to tell whether the application code failed or the commit did.</li>
+</ol>
+<h2 id="thefixclassifytheerror">The fix: classify the error</h2>
+<p>The fix is to wrap commit errors in a typed error, so the caller can act differently:</p>
+<pre><code class="go language-go">var ErrCommit = errors.New("commit failed")
+
+func (m *txManager) Do(ctx context.Context, fn func(ctx context.Context) error) error {
+    tx, err := m.db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+
+    var done bool
+    defer func() {
+        if !done {
+            _ = tx.Rollback() // only rolls back if fn panicked
+        }
+    }()
+
+    if err := fn(ctxWithTx(ctx, tx)); err != nil {
+        done = true
+        _ = tx.Rollback()
+        return err
+    }
+
+    if err := tx.Commit(); err != nil {
+        done = true
+        return fmt.Errorf("%w: %w", ErrCommit, err)
+    }
+
+    done = true
+    return nil
+}
+</code></pre>
+<p>Now the caller can check:</p>
+<pre><code class="go language-go">if err := txManager.Do(ctx, fn); err != nil {
+    if errors.Is(err, ErrCommit) {
+        // commit failed — state on the DB is "rolled back" but
+        // *we don't know* whether peers (cache, search index)
+        // observed any of our intermediate writes.
+        // Treat the operation as failed-but-uncertain.
+        return retryableErr(err)
+    }
+    return err
+}
+</code></pre>
+<p>I find this distinction useful because it forces me to name the thing. "Commit failed" is not the same as "the business logic rejected this request" and lumping them together makes the recovery story muddier than it needs to be.</p>
+<h2 id="asecondbugthathidforweeks">A second bug that hid for weeks</h2>
+<p>There's a related bug that's easier to ship and harder to spot: silently swallowing the rollback error.</p>
+<pre><code class="go language-go">defer func() {
+    _ = tx.Rollback() // &lt;-- swallowed!
+}()
+</code></pre>
+<p>Why does it matter? Most of the time it doesn't. <a href="https://pkg.go.dev/database/sql#Tx.Rollback"><code>Rollback()</code></a> on an already-committed transaction returns <code>sql.ErrTxDone</code>, and that's fine. But the <code>database/sql</code> driver also returns errors from <code>Rollback()</code> if the connection has been killed mid-transaction. If the linter is happy and you're never logging it, you'll never know.</p>
+<p>The shape that finally satisfied me:</p>
+<pre><code class="go language-go">defer func() {
+    if rbErr := tx.Rollback(); rbErr != nil &amp;&amp; !errors.Is(rbErr, sql.ErrTxDone) {
+        logger.Warn("rollback returned non-trivial error", "err", rbErr)
+    }
+}()
+</code></pre>
+<p>Loud enough to find in logs, quiet enough to not page anyone in the night.</p>
+<h2 id="lessonsikeeprelearning">Lessons I keep relearning</h2>
+<ol>
+<li><strong><code>Commit()</code> is a write.</strong> Treat it like one. It can fail, and the failure mode is different from "business logic failed".</li>
+<li><strong>Don't <code>Rollback()</code> after <code>Commit()</code> errored.</strong> It just returns <code>ErrTxDone</code> and pollutes the call site with a useless line of code.</li>
+<li><strong>Wrap commit errors in a sentinel.</strong> It makes recovery code possible to write.</li>
+<li><strong>Don't silently swallow <code>Rollback()</code> errors.</strong> Most of them are fine. The ones that aren't are the ones you want to see.</li>
+<li><strong>Tests rarely exercise commit failure.</strong> If you care about the path, build a fake driver that can be told to fail at commit time. A <code>httptest.Server</code>-style escape hatch for <code>database/sql/driver</code> does wonders.</li>
+</ol>
+<p>Going forward, I default to a transaction manager that exposes a clear <code>ErrCommit</code> and logs <code>Rollback()</code> non-trivially.</p>
+<p>Happy committing, and rolling back!</p>
+<h2 id="references">References</h2>
+<ul>
+<li>Go <code>database/sql</code> package: <a href="https://pkg.go.dev/database/sql"><code>pkg.go.dev/database/sql</code></a></li>
+<li><code>sql.ErrTxDone</code>: <a href="https://pkg.go.dev/database/sql#pkg-variables"><code>pkg.go.dev/database/sql#pkg-variables</code></a></li>
+<li><code>Tx.Commit</code>, <code>Tx.Rollback</code>: <a href="https://pkg.go.dev/database/sql#Tx"><code>pkg.go.dev/database/sql#Tx</code></a></li>
+<li><code>errors.Is</code> / <code>errors.As</code> / <code>%w</code> wrapping: <a href="https://pkg.go.dev/errors"><code>pkg.go.dev/errors</code></a>, <a href="https://pkg.go.dev/fmt#Errorf"><code>fmt.Errorf</code></a></li>
+<li>PostgreSQL <code>SERIALIZABLE</code> and SSI: <a href="https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE"><code>postgresql.org/docs/current/transaction-iso.html</code></a></li>
+<li>PostgreSQL deferred constraints (<code>SET CONSTRAINTS</code>): <a href="https://www.postgresql.org/docs/current/sql-set-constraints.html"><code>postgresql.org/docs/current/sql-set-constraints.html</code></a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

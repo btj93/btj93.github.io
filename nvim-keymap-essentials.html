@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Neovim Custom Keymap Essentials</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-04-05">Sat, April 05, 2025</time>
+        <h1 class="mar-b-7">Neovim Custom Keymap Essentials</h1>
+    </header>
+    <h1 id="neovimcustomkeymapessentials">Neovim Custom Keymap Essentials</h1>
+<p>Some keymap remappings I use in Neovim, with the Lua snippets to set them up.</p>
+<h2 id="understandingkeymapsinneovim">Understanding Keymaps in Neovim</h2>
+<p>Neovim (and Vim) is built around <strong>modal editing</strong>, where different modes (normal, insert, visual, etc.) have distinct key behaviors. Keymaps let you customize or extend these behaviors.</p>
+<p>For example:</p>
+<ul>
+<li>In <strong>normal mode</strong>, pressing <code>h</code> moves the cursor left.</li>
+<li>In <strong>visual mode</strong>, <code>h</code> extends the selection left.</li>
+</ul>
+<p>Custom keymaps can optimize these interactions to fit your habits and needs.</p>
+<h2 id="qualityoflifekeymaps">Quality-of-Life Keymaps</h2>
+<h3 id="keepthecursorcenteredwithzz">Keep the Cursor Centered with <code>zz</code></h3>
+<p>Commands like <code>gg</code> (go to top) and <code>G</code> (go to bottom) place the cursor at the screen edge, forcing your eyes to hunt for it.</p>
+<p>Instead, remap them to recenter the cursor with <code>zz</code>:</p>
+<pre><code class="lua language-lua">vim.keymap.set("n", "G", "Gzz", { noremap = true, desc = "Go to bottom and center" })
+</code></pre>
+<p>Similarly, remap search motions so the match is always centered:</p>
+<pre><code class="lua language-lua">vim.keymap.set("n", "n", "nzz", { noremap = true })
+vim.keymap.set("n", "N", "Nzz", { noremap = true })
+vim.keymap.set("n", "*", "*zz", { noremap = true })
+vim.keymap.set("n", "#", "#zz", { noremap = true })
+vim.keymap.set("n", "g*", "g*zz", { noremap = true })
+vim.keymap.set("n", "g#", "g#zz", { noremap = true })
+</code></pre>
+<h3 id="duplicatealineandcommenttheoriginal">Duplicate a Line and Comment the Original</h3>
+<p>When experimenting, it's handy to duplicate a line and comment out the original:</p>
+<pre><code class="lua language-lua">vim.keymap.set("n", "yc", "yy&lt;cmd&gt;normal gcc&lt;CR&gt;p", { noremap = true, desc = "Duplicate line and comment original" })
+</code></pre>
+<p>For <strong>visual mode</strong>, duplicate and comment a selection:</p>
+<pre><code class="lua language-lua">local function duplicate_and_comment()
+  -- Exit visual mode
+  local esc = vim.api.nvim_replace_termcodes("&lt;Esc&gt;", true, false, true)
+  vim.api.nvim_feedkeys(esc, "x", false)
+
+  -- Get selection range
+  local start_line = vim.fn.line("'&lt;")
+  local end_line = vim.fn.line("'&gt;")
+
+  -- Yank and paste below
+  vim.cmd(start_line .. "," .. end_line .. "yank")
+  vim.cmd((end_line + 1) .. "put")
+
+  -- Reselect pasted block
+  vim.api.nvim_feedkeys("gv", "n", false)
+
+  -- Comment the original selection
+  vim.api.nvim_feedkeys("gc", "v", false)
+end
+
+vim.keymap.set("v", "yc", duplicate_and_comment, { noremap = true, desc = "Duplicate selection and comment original" })
+</code></pre>
+<h3 id="selecttotheendofline">Select to the End of Line</h3>
+<p>We have:</p>
+<ul>
+<li><code>Y</code> to yank to end of line</li>
+<li><code>D</code> to delete to end of line</li>
+<li><code>C</code> to change to end of line</li>
+</ul>
+<p>Why not a <strong>select to end of line</strong>?</p>
+<pre><code class="lua language-lua">vim.keymap.set("n", "&lt;leader&gt;v", "vg_", { noremap = true, desc = "Select to last non-blank character" })
+</code></pre>
+<h3 id="movetostartendoflinewithhomerowkeys">Move to Start/End of Line with Home Row Keys</h3>
+<p><code>_</code> and <code>$</code> move to start/end of line, but they're awkward to reach. Try:</p>
+<pre><code class="lua language-lua">vim.keymap.set({ "n", "v" }, "gh", "_", { noremap = true, desc = "Go to start of line" })
+vim.keymap.set({ "n", "v" }, "gl", "$", { noremap = true, desc = "Go to end of line" })
+</code></pre>
+<h3 id="easierescapefrominsertmode">Easier Escape from Insert Mode</h3>
+<p>Pressing <code>&lt;Esc&gt;</code> is disruptive. Instead, remap quick sequences:</p>
+<p>Common candidates includes:</p>
+<ul>
+<li><code>&lt;C-c&gt;</code></li>
+<li><code>jj</code></li>
+<li><code>jk</code></li>
+<li><code>kj</code></li>
+<li><code>kk</code></li>
+</ul>
+<pre><code class="lua language-lua">vim.keymap.set("i", "jk", "&lt;Esc&gt;", { noremap = true, desc = "Exit insert mode with jk" })
+vim.keymap.set("i", "JK", "&lt;Esc&gt;", { noremap = true, desc = "Exit insert mode with JK" })
+</code></pre>
+<blockquote>
+  <p><strong>The only drawback is that now I am constantly inserting excessive <code>jk</code> at the end of sentences all over the place outside of NeoVim.jk</strong></p>
+</blockquote>
+<p>Alternatively, remap <code>CapsLock</code> to <code>Esc</code> at the OS or firmware level.</p>
+<h4 id="bonustip">Bonus Tip</h4>
+<p>If you did remap <code>jk</code> to <code>Esc</code>, you will find that there is a small delay between pressing <code>j</code> and the character showing up.</p>
+<p>This is because NeoVim is waiting for the next keypress to know whether you are try to use the <code>jk</code> sequence or not.</p>
+<p>After <a href="https://neovim.io/doc/user/options.html#" title="timeoutlen">a brief configurable delay</a>, NeoVim inserts the character anyway.</p>
+<p>To fix this, you can install the following plugin, designed specifically for this purpose:</p>
+<div class="github-card" data-github="max397574/better-escape.nvim" data-width="400" data-height="" data-theme="default"></div>
+<h2 id="featurespecifickeymaps">Feature-Specific Keymaps</h2>
+<h3 id="togglediffmodesidebyside">Toggle Diff Mode Side-by-Side</h3>
+<p>Built-in diff mode is handy for comparing files. To toggle it:</p>
+<pre><code class="lua language-lua">local function toggle_diff()
+  if vim.wo.diff then
+    vim.cmd("diffoff!")
+  else
+    vim.cmd("windo diffthis")
+  end
+end
+
+vim.keymap.set("n", "&lt;leader&gt;dd", toggle_diff, { noremap = true, desc = "Toggle diff mode" })
+</code></pre>
+<h3 id="searchandreplacewordundercursor">Search and Replace Word Under Cursor</h3>
+<p>Replace all instances of the word under the cursor:</p>
+<pre><code class="lua language-lua">vim.keymap.set("n", "&lt;leader&gt;r", [[:%s/\&lt;&lt;C-r&gt;&lt;C-w&gt;\&gt;//g&lt;Left&gt;&lt;Left&gt;]], { desc = "Search and replace word under cursor" })
+</code></pre>
+<blockquote>
+  <p>Source: <a href="https://bit.ly/4eLAARp">Vim Tips Wiki</a></p>
+</blockquote>
+<h3 id="movethecursorininsertmode">Move the Cursor in Insert Mode</h3>
+<p>Sometimes you just want to nudge the cursor without leaving insert mode:</p>
+<pre><code class="lua language-lua">-- Move by character
+vim.keymap.set("i", "&lt;C-n&gt;", "&lt;Down&gt;", { noremap = true })
+vim.keymap.set("i", "&lt;C-p&gt;", "&lt;Up&gt;", { noremap = true })
+vim.keymap.set("i", "&lt;C-b&gt;", "&lt;Left&gt;", { noremap = true })
+vim.keymap.set("i", "&lt;C-f&gt;", "&lt;Right&gt;", { noremap = true })
+vim.keymap.set("i", "&lt;C-e&gt;", "&lt;C-o&gt;$", { noremap = true })
+
+-- Move by word
+vim.keymap.set("i", "&lt;M-f&gt;", "&lt;C-o&gt;w", { noremap = true })
+vim.keymap.set("i", "&lt;M-b&gt;", "&lt;C-o&gt;b", { noremap = true })
+</code></pre>
+<p>These mimic common shortcuts in terminals and macOS apps.</p>
+<h3 id="sendsearchresultstothequickfixlist">Send Search Results to the Quickfix List</h3>
+<p>After searching (<code>/</code> or <code>*</code>), list all matches in the quickfix window:</p>
+<pre><code class="lua language-lua">vim.keymap.set("n", "g/", ":vimgrep /&lt;C-R&gt;//j %&lt;CR&gt;|:cw&lt;CR&gt;", { noremap = true, silent = true, desc = "Populate quickfix with search results" })
+</code></pre>
+<h3 id="yankdeleteorchangeuptothenextquote">Yank, Delete, or Change Up to the Next Quote</h3>
+<p>NeoVim lacks a simple <code>yq</code> (yank to next quote). Here's a workaround:</p>
+<pre><code class="lua language-lua">vim.keymap.set("n", "dq", "v/[\"'`]&lt;CR&gt;&lt;Left&gt;d&lt;cmd&gt;nohlsearch&lt;CR&gt;", { noremap = true, desc = "Delete up to next quote" })
+vim.keymap.set("n", "yq", "v/[\"'`]&lt;CR&gt;&lt;Left&gt;y&lt;cmd&gt;nohlsearch&lt;CR&gt;", { noremap = true, desc = "Yank up to next quote" })
+vim.keymap.set("n", "cq", "v/[\"'`]&lt;CR&gt;&lt;Left&gt;di&lt;cmd&gt;nohlsearch&lt;CR&gt;", { noremap = true, desc = "Change up to next quote" })
+</code></pre>
+<p>It's by no means the most elegant solution, but it works!</p>
+<h2 id="finalthoughts">Final Thoughts</h2>
+<p>Start small, remap what annoys you, and build up from there.</p>
+<p>Happy hacking! 🚀</p>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

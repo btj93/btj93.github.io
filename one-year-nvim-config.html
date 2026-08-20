@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>One year in — the Neovim config patterns I won't give up</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2025-07-19">Sat, July 19, 2025</time>
+        <h1 class="mar-b-7">One year in — the Neovim config patterns I won't give up</h1>
+    </header>
+    <h1 id="oneyearintheneovimconfigpatternsiwontgiveup">One year in — the Neovim config patterns I won't give up</h1>
+<p>It's been roughly a year since I migrated to Neovim. The <code>.config/nvim</code> folder has gone through plugin sprees, deletion sprees, refactoring sprees, and the occasional "I'm sure this colorscheme is the one" phase.</p>
+<p>I figured a quieter month was a good excuse to look back and write down the patterns that have <em>survived</em>. Not the plugins themselves, those still rotate. I mean the conventions and the little structural decisions that keep the config from collapsing into a 2,000-line <code>init.lua</code>.</p>
+<h2 id="pattern1onefileperplugin">Pattern 1: one file per plugin</h2>
+<p>Easily the biggest one. My old setup had a single <code>plugins.lua</code> with every plugin spec, options, keys, and dependencies inline. After about thirty plugins it became unworkable.</p>
+<p>The split that stuck for me, borrowed almost verbatim from <a href="https://www.lazyvim.org/">LazyVim</a> (a Neovim distro built on <a href="https://github.com/folke/lazy.nvim">lazy.nvim</a>):</p>
+<pre><code>lua/
+├── config/
+│   ├── autocmds.lua
+│   ├── keymaps.lua
+│   ├── lazy.lua
+│   └── options.lua
+└── plugins/
+    ├── harpoon.lua
+    ├── mini-files.lua
+    ├── treesitter.lua
+    └── ...
+</code></pre>
+<p>Every plugin gets a file. The file returns a spec table. That's it.</p>
+<pre><code class="lua language-lua">-- lua/plugins/harpoon.lua
+return {
+  "ThePrimeagen/harpoon",
+  branch = "harpoon2",
+  dependencies = { "nvim-lua/plenary.nvim" },
+  opts = { settings = { sync_on_ui_close = true } },
+  keys = { ... },
+}
+</code></pre>
+<p>Why this matters:</p>
+<ul>
+<li><strong>Disable a plugin by renaming the file.</strong> <code>harpoon.lua</code> → <code>harpoon.lua.disabled</code>. No commenting-out, no <code>enabled = false</code> graveyard.</li>
+<li><strong>Diffs are clean.</strong> A change to <code>harpoon.lua</code> only touches <code>harpoon.lua</code>. Code review (even of yourself, six months later) is dramatically easier.</li>
+<li><strong>You can search for "where is this plugin configured" by literally <code>:find &lt;plugin&gt;.lua</code>.</strong></li>
+</ul>
+<p>I will never go back.</p>
+<h2 id="pattern2keymapslivewiththeplugintheybelongto">Pattern 2: keymaps live with the plugin they belong to</h2>
+<p>This one took me a while to internalize. The temptation is to throw all keymaps into <code>lua/config/keymaps.lua</code> so you can "see them in one place".</p>
+<p>The cost is that the plugin file no longer tells you what the plugin does on your machine. To answer "what's <code>&lt;leader&gt;ha</code>?", you have to grep across the config.</p>
+<p>The convention I settled on:</p>
+<ul>
+<li><strong>General editing keymaps</strong> (movement, escape, save, etc.) → <code>lua/config/keymaps.lua</code>.</li>
+<li><strong>Plugin-specific keymaps</strong> → live inside the plugin's spec under <code>keys = { ... }</code>.</li>
+</ul>
+<p>The <a href="https://lazy.folke.io/spec/lazy_loading">lazy.nvim <code>keys</code> field</a> is doubly nice because it triggers plugin loading. Half my plugins are now lazy-loaded purely because the only entry point is a keymap.</p>
+<pre><code class="lua language-lua">return {
+  "echasnovski/mini.files",
+  keys = {
+    { "&lt;leader&gt;e", function() require("mini.files").open() end, desc = "Open mini.files" },
+  },
+  -- no need for `event = "VeryLazy"` — the keymap loads it
+}
+</code></pre>
+<h2 id="pattern3leaderprefixedkeymapsoverchordstyle">Pattern 3: leader-prefixed keymaps over chord-style</h2>
+<p>I went through a phase of trying to be efficient by binding things to <code>&lt;C-S-Whatever&gt;</code>. It does not work for me. I can never remember which <code>&lt;C-S-...&gt;</code> does what, and tooling assumes too many of those for itself.</p>
+<p>What stuck instead: nearly everything I do interactively goes through <code>&lt;leader&gt;</code>, with a one- or two-letter mnemonic.</p>
+<pre><code>&lt;leader&gt;1..4   -- harpoon slots
+&lt;leader&gt;ha     -- harpoon add
+&lt;leader&gt;hl     -- harpoon list
+&lt;leader&gt;r      -- replace word under cursor
+&lt;leader&gt;dd     -- toggle diff
+&lt;leader&gt;v      -- select to end of line
+</code></pre>
+<p>When I forget what the second key is, <a href="https://github.com/folke/which-key.nvim">which-key.nvim</a> shows me a menu.</p>
+<blockquote>
+  <p>Plugins mentioned in this post: <a href="https://github.com/ThePrimeagen/harpoon">harpoon</a>, <a href="https://github.com/echasnovski/mini.files">mini.files</a>.</p>
+</blockquote>
+<p>It's also a lot kinder to people who pair on my machine. They can read the popup and intuit the structure instead of memorizing what <code>&lt;C-S-M-F4&gt;</code> means.</p>
+<h2 id="pattern4dontfightlazyvimextendit">Pattern 4: don't fight LazyVim, extend it</h2>
+<p>I started with <a href="https://www.lazyvim.org/">LazyVim</a> as a distro. Then I went through the "I want to build it all myself" phase. Then I came back.</p>
+<p>LazyVim is a baseline, and every plugin it ships can be:</p>
+<ul>
+<li><strong>Replaced</strong> by returning the same spec name with <code>enabled = false</code>.</li>
+<li><strong>Tweaked</strong> by returning the same spec name with my own <code>opts</code>.</li>
+<li><strong>Extended</strong> by adding more <code>keys</code> or dependencies.</li>
+</ul>
+<p>So the "do it all myself" phase mostly cost me time. The thing I actually want is "LazyVim's defaults, but with my opinions layered on top." That's what the distro is designed for.</p>
+<h2 id="pattern5captureexperimentsinluauserorwherevernotininitlua">Pattern 5: capture experiments in <code>lua/user/</code> (or wherever), not in <code>init.lua</code></h2>
+<p>When I want to try a new keymap, plugin idea, or Lua snippet, the temptation is to wedge it directly into <code>init.lua</code> "just to see". Three weeks later there are eight half-formed experiments competing for attention there.</p>
+<p>I now have a <code>lua/user/</code> folder that's essentially a scratch space:</p>
+<pre><code>lua/user/
+├── jump_to_func.lua
+├── neotest_to_tmux.lua
+└── README.md
+</code></pre>
+<p>Things in <code>user/</code> are required from somewhere intentionally (<code>require("user.neotest_to_tmux").setup()</code> in a plugin spec, for example). If a snippet earns its keep, it moves into the plugin file it belongs to. If it doesn't, it stays where it is, and <code>git log</code> tells me when I stopped touching it.</p>
+<p>It's a small thing. It dramatically reduces the half-life of a "quick test".</p>
+<h2 id="pattern6lockfilesingitplugindataout">Pattern 6: lock files in git, plugin data out</h2>
+<p><code>lazy-lock.json</code> is in git. The plugin install directory is not.</p>
+<p>This sounds obvious, but I had to learn it the hard way after losing my config to a corrupted plugin install. The lock file gives you reproducibility. The install directory gives you 200 MB of submodules and headaches.</p>
+<pre><code>.gitignore:
+    /plugin/
+    /spell/*.spl
+    /spell/*.sug
+</code></pre>
+<pre><code>git add:
+    lazy-lock.json
+</code></pre>
+<p>A <code>:Lazy restore</code> after <code>git clone</code> puts the world back together exactly as it was. No regrets.</p>
+<h2 id="pattern7whenindoubtwriteitsmallandinline">Pattern 7: when in doubt, write it small and inline</h2>
+<p>I went through a phase of trying to extract every helper into modules. Nice from a Java perspective, painful from a Vim one.</p>
+<p>The thing about Lua-in-Neovim is that the API surface is the config. You're writing instructions for an editor rather than a library. A five-line autocmd inline is more discoverable than a <code>require("user.utils").attach_autocmd(...)</code> with the same body hidden one file away.</p>
+<p>Now my rule is: extract when the same logic shows up in three places. Not before.</p>
+<h2 id="whatimstillfiguringout">What I'm still figuring out</h2>
+<p>The next thing I want to crack is a clean way to share keymap definitions between <em>modes</em>. I have <code>gh</code>/<code>gl</code> bound to start/end of line in both normal and visual via <code>{"n", "v"}</code>, but more complex maps (like motion repeats, or operator-pending custom motions) don't generalize as cleanly.</p>
+<p>I don't have an answer yet. Probably a topic for a future post.</p>
+<p>For now though, the structure above has survived a year of churn, and I can find anything in my config in under five seconds. That's the only metric I really care about.</p>
+<p>Happy hacking!</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.lazyvim.org/">LazyVim</a>: Neovim distro</li>
+<li><a href="https://github.com/folke/lazy.nvim">lazy.nvim</a>: plugin manager</li>
+<li><a href="https://lazy.folke.io/spec/lazy_loading">lazy.nvim lazy loading</a>: including the <code>keys</code> field</li>
+<li><a href="https://lazy.folke.io/usage/lockfile">lazy.nvim lockfile</a>: <code>lazy-lock.json</code> semantics</li>
+<li><a href="https://github.com/folke/which-key.nvim">which-key.nvim</a></li>
+<li><a href="https://github.com/ThePrimeagen/harpoon">harpoon</a></li>
+<li><a href="https://github.com/echasnovski/mini.files">mini.files</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

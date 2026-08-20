@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Three coordinate systems and a spring — what 0.4.0 of Reel taught me</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2026-05-17">Sun, May 17, 2026</time>
+        <h1 class="mar-b-7">Three coordinate systems and a spring — what 0.4.0 of Reel taught me</h1>
+    </header>
+    <h1 id="threecoordinatesystemsandaspringwhat040ofreeltaughtme">Three coordinate systems and a spring — what 0.4.0 of Reel taught me</h1>
+<p><a href="/reel-scrollable-window-manager">Reel</a> hit 0.4.0 a few days ago. The headline features this release: shared strips across horizontally-aligned monitors, an animated vertical "raise" on focus change, and a snapshot-based replay system for restoring window layouts when you switch back to a macOS Space.</p>
+<div class="github-card" data-github="btj93/reel" data-width="400" data-height="" data-theme="default"></div>
+<p>But the part I want to write about is the one that nearly broke me: the <em>three</em> different coordinate systems that overlay code on macOS lives in, and how they collide.</p>
+<h2 id="asmalldetourwhataraiseis">A small detour: what a "raise" is</h2>
+<p>Quick context before the coordinate stuff. Reel 0.4.0 added a focus indicator I call <strong>raise</strong>: when you focus a window, that window's <em>column</em> lifts upward by a few pixels (configurable), and the previously-focused column drops back to baseline.</p>
+<p>The animation is per-column. Each column has its own Y offset and its own spring animation. When focus moves from column A to column B:</p>
+<ul>
+<li>B's spring retargets toward <code>raiseHeight</code>.</li>
+<li>A's spring retargets toward <code>0</code>.</li>
+<li>The frame loop ticks both columns each frame until both springs settle.</li>
+</ul>
+<pre><code class="swift language-swift">struct ColumnData {
+    var tile: TileID
+    var width: CGFloat
+    var raiseAnimation: SpringAnimation?
+    var cachedRaiseTarget: CGFloat
+    // ...
+}
+</code></pre>
+<p>Adding <code>raiseOffset</code> to the layout function was the easy part. The hard part was that the layout function, <code>computeTargetFrames(strip:, time:)</code>, is called from a dozen different code paths, and every one of them had to be updated to pass through the new offset. I missed exactly one. The window that landed in the wrong spot was on a non-primary monitor, of course, because <em>that's</em> where the coordinate-system bugs hide.</p>
+<h2 id="thethreecoordinatesystems">The three coordinate systems</h2>
+<p>All three are valid, all in use somewhere in the macOS toolchain, and at the seams between them everything goes wrong.</p>
+<h3 id="1cgcoordinates">1. CG coordinates</h3>
+<p><strong>Origin: top-left of the primary display. Y grows downward.</strong></p>
+<p>This is the world <a href="https://developer.apple.com/documentation/coregraphics/cgevent"><code>CGEvent.location</code></a> lives in. It's what AX returns for a window's <code>position</code> attribute. It's what <code>CGRect</code> measurements in CoreGraphics use.</p>
+<pre><code>(0, 0) ────────► +X
+   │
+   │
+   ▼ +Y
+</code></pre>
+<p>If you're reading the mouse position, you're in CG.</p>
+<h3 id="2appkitglobalcoordinates">2. AppKit global coordinates</h3>
+<p><strong>Origin: bottom-left of the primary display. Y grows upward. Spans all displays.</strong></p>
+<p>This is the world <a href="https://developer.apple.com/documentation/appkit/nsscreen"><code>NSScreen.frame</code></a> lives in. It's the coord space <a href="https://developer.apple.com/documentation/appkit/nswindow"><code>NSWindow.frame</code></a> is <em>expressed in</em>. It's what <code>NSEvent.locationInWindow</code> ultimately gets converted from.</p>
+<pre><code>   ▲ +Y
+   │
+   │
+(0, 0) ────────► +X
+</code></pre>
+<p>On a single-monitor setup, the AppKit global y-coord is just <code>screenHeight - cgY</code>. Easy. The moment you add a second monitor and stack it above or below the primary, this no longer holds for the secondary monitor. Its <code>frame.origin</code> is some negative or positive Y offset away from the primary's origin.</p>
+<h3 id="3windowlocalcoordinates">3. Window-local coordinates</h3>
+<p><strong>Origin: bottom-left of the <em>window</em>. Y grows upward.</strong></p>
+<p>This is what <a href="https://developer.apple.com/documentation/appkit/nsview"><code>NSView.convert(_:from:)</code></a> returns. It's the coord space a view's <code>bounds</code> lives in.</p>
+<pre><code>   ▲ +Y inside the window
+   │
+   │
+(0, 0) ────────► +X
+   (bottom-left of THIS window)
+</code></pre>
+<p>For a window at <code>(100, 200)</code> in AppKit global coords with a height of <code>500</code>, the window-local coords are <code>(0, 0)</code> to <code>(width, 500)</code>, and the AppKit-global y-coord <code>300</code> corresponds to window-local y-coord <code>100</code>.</p>
+<h2 id="thecollision">The collision</h2>
+<p>The bug that took the most days in 0.4.0 was this:</p>
+<blockquote>
+  <p>The drag-to-reorder overlay worked perfectly on the primary monitor and silently miscomputed everything by a few hundred pixels on the secondary.</p>
+</blockquote>
+<p>The drag overlay is a fullscreen <code>NSWindow</code> covering the entire monitor while you drag a window's title bar. It receives a mouse position (from a <code>CGEventTap</code>), converts it into window-local coords to figure out which "drop zone" the cursor is over, and renders a preview thumbnail there.</p>
+<p>The code looked roughly like this:</p>
+<pre><code class="swift language-swift">// Get mouse position from CGEventTap callback.
+let cgPosition = NSEvent.mouseLocation  // ⚠️ this is AppKit global
+
+// Convert to overlay-window-local coords.
+let localPosition = overlayWindow.contentView!.convert(cgPosition, from: nil)
+</code></pre>
+<p>That <code>convert(_:from: nil)</code> was the trap:</p>
+<blockquote>
+  <p>Converts the given point from the <strong>window's</strong> coordinate system to the receiver's coordinate system.</p>
+</blockquote>
+<p>It's converting from the <em>window's</em> coords, not from AppKit global coords. The two coincide <em>only when the window's origin is <code>(0, 0)</code></em>, which is true on the primary display. On the secondary, the overlay window's origin is <code>(0, primaryHeight + somePadding)</code> or wherever the secondary monitor sits in AppKit global space. Feeding global coords into <code>convert(_:from: nil)</code> silently subtracts a zero where it should be subtracting <code>screen.frame.origin</code>.</p>
+<p>So the math was off by exactly the secondary monitor's frame origin.</p>
+<p>The fix is to route AppKit-global inputs through <code>convertFromScreen(_:)</code> first:</p>
+<pre><code class="swift language-swift">let screenRelative = overlayWindow.convertPoint(fromScreen: cgPosition)
+let localPosition = overlayWindow.contentView!.convert(screenRelative, from: nil)
+</code></pre>
+<p><code>convertPoint(fromScreen:)</code> does the screen-frame-origin offset for you. Once you have a point that's expressed in the overlay window's own coord system, <code>convert(_:from: nil)</code> does the right thing.</p>
+<p>I now have a comment in the file that's roughly:</p>
+<blockquote>
+  <p><code>NSView.convert(_:from: nil)</code> converts from the <strong>window's</strong> coord system, not AppKit-global. They only coincide on the primary display. If you have an AppKit-global point, go through <code>convertPoint(fromScreen:)</code> first.</p>
+</blockquote>
+<h2 id="whatidonow">What I do now</h2>
+<p><strong>1. Name the coord system in the variable name.</strong></p>
+<p>Not <code>point</code> or <code>position</code>. Use <code>cgPosition</code>, <code>appKitGlobalPosition</code>, <code>windowLocalPoint</code>. The verbosity catches mistakes at the assignment site, not at the bug site three modules away.</p>
+<pre><code class="swift language-swift">let cgMouse = NSEvent.mouseLocation       // wait, this is AppKit-global
+// caught at compile time once I renamed: my eye notices the mismatch
+</code></pre>
+<p><strong>2. Centralize the conversions.</strong></p>
+<p>I have a <code>CoordinateConversions</code> namespace that exposes the conversions I do most often. Inside it, the asserts are aggressive: non-finite values panic in debug builds. Outside it, callers don't have to remember the spelling of <code>convertFromScreen</code>.</p>
+<p><strong>3. Test on a multi-monitor setup, with the secondary above the primary.</strong></p>
+<p>Single-monitor and side-by-side don't trigger the worst bugs. Stacked monitors do, because the secondary's frame origin has a non-zero Y. If your test setup is "side-by-side with the secondary to the right of the primary", you're missing the entire class.</p>
+<p><strong>4. AX frames are top-left.</strong></p>
+<p>The <code>AXUIElement</code> <code>position</code> and <code>size</code> attributes are in CG coords (top-left origin), even though everything else in AppKit is bottom-left. The conversion is per-display: <code>appKitY = screenHeight - cgY - height</code>. Get the wrong screen's height in there (e.g. the primary's instead of the display the window is on) and you've reintroduced the bug.</p>
+<p>This is anchored at the primary display's height specifically, <code>CGMainDisplayID()</code>'s height, because that's the y-origin of AppKit's global coord system. If the primary changes mid-session (yes, this happens, you unplug the laptop's lid and the external becomes primary), you have to re-anchor. That cost me a release.</p>
+<h2 id="theotherbig040changesharedstripsacrossalignedmonitors">The other big 0.4.0 change: shared strips across aligned monitors</h2>
+<p>Briefly, since this one was <em>also</em> a coord-system story.</p>
+<p>When two monitors are horizontally aligned (same height, same y-origin, edges touch), Reel now treats them as one logical strip. Columns flow across the seam. Scrolling left/right moves the viewport across both monitors.</p>
+<p>The detection logic is the easy part: two displays are "horizontally aligned" if their edges touch within 0.5 px AND they have any Y-overlap.</p>
+<p>The fiddly part is <em>width preset resolution</em>. If a column says "33% width", 33% of <em>what</em>? The display the column currently centers on. So as a column scrolls across the seam, its target width can change. The animation has to handle the width change without snapping, because the user is mid-gesture and a snap would feel terrible.</p>
+<p>The other fiddly part: macOS has a "Displays have separate Spaces" setting. When it's on, each display has its own Space and merging strips across them doesn't make sense (a Space change on one display doesn't affect the other). Reel falls back to per-display strips in that mode and surfaces a menu bar warning, because almost no one realizes that setting is the reason their multi-monitor experience is weird.</p>
+<h2 id="lessons">Lessons</h2>
+<ol>
+<li><strong>There are three coord systems on macOS.</strong> CG (top-left, primary display), AppKit global (bottom-left, primary display), and window-local (bottom-left, per window). The conversion between them is <em>not</em> a single subtract; it depends on the display.</li>
+<li><strong><code>NSView.convert(_:from: nil)</code> is from the view's <em>window</em>, not from screen.</strong> They coincide only on the primary display. This is the single biggest footgun.</li>
+<li><strong>Name your coord systems in your variables.</strong> <code>cgMouse</code> vs <code>appKitGlobalMouse</code> reads as a different thing to your eye than two variables both called <code>mouse</code>.</li>
+<li><strong>Test on stacked monitors, not side-by-side.</strong> Stacked = different Y origins. Side-by-side = different X origins, but Y matches, so most coord bugs sleep through your test.</li>
+<li><strong>AX frames are CG.</strong> The whole rest of AppKit is bottom-left; AX is top-left; you'll convert wrong at least once.</li>
+</ol>
+<p>Reel 0.4.0 is a much more solid release than 0.3 was, and most of the work was in this kind of careful boundary-checking. The features look small on a changelog. The patches under them are pages of "and now we also do the conversion through <code>convertPoint(fromScreen:)</code> so the secondary monitor stops being haunted."</p>
+<p>Worth it. The thing is on my dock, all day, every day.</p>
+<p>Happy scrolling, across as many monitors as you like.</p>
+<h2 id="references">References</h2>
+<p><strong>Apple class docs</strong></p>
+<ul>
+<li><a href="https://developer.apple.com/documentation/appkit/nsview"><code>NSView</code></a>: <code>convert(_:from:)</code> lives here</li>
+<li><a href="https://developer.apple.com/documentation/appkit/nswindow"><code>NSWindow</code></a>: <code>convertPoint(fromScreen:)</code> lives here</li>
+<li><a href="https://developer.apple.com/documentation/appkit/nsscreen"><code>NSScreen</code></a>: display geometry in AppKit-global coords</li>
+<li><a href="https://developer.apple.com/documentation/coregraphics/cgevent"><code>CGEvent</code></a>: <code>location</code> is CG (top-left primary display)</li>
+<li><a href="https://developer.apple.com/documentation/applicationservices/axuielement"><code>AXUIElement</code></a>: frames are CG</li>
+</ul>
+<p><strong>Related</strong></p>
+<ul>
+<li><a href="/reel-scrollable-window-manager">Part 1 — Reel: writing a scrollable tiling window manager for macOS</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

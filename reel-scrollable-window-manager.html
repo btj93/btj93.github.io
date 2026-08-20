@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Reel — writing a scrollable tiling window manager for macOS</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2026-04-19">Sun, April 19, 2026</time>
+        <h1 class="mar-b-7">Reel — writing a scrollable tiling window manager for macOS</h1>
+    </header>
+    <h1 id="reelwritingascrollabletilingwindowmanagerformacos">Reel — writing a scrollable tiling window manager for macOS</h1>
+<p>I've been quietly building a window manager for the last couple of months. I called it <strong>Reel</strong>, because the windows live on an infinite horizontal strip, and you scroll left and right through them like film through a projector.</p>
+<div class="github-card" data-github="btj93/reel" data-width="400" data-height="" data-theme="default"></div>
+<p>This post is the "what is it, why does it exist, and what does it actually do" introduction. The hard architectural bits (coordinate systems, animation primitives, multi-monitor merging) deserve their own post next month.</p>
+<h2 id="thepitch">The pitch</h2>
+<p>Every tiling window manager I've used on macOS divides the screen into rectangles and stuffs windows into them. <a href="https://github.com/koekeishiya/yabai">yabai</a>, <a href="https://github.com/ianyh/Amethyst">Amethyst</a> and <a href="https://github.com/nikitabobko/AeroSpace">AeroSpace</a> are all flavors of "split the available pixels".</p>
+<p>This is a perfectly reasonable thing to do, and it's wrong for me.</p>
+<p>What I want is closer to how I work on paper. I have one window I'm focused on, a couple I might glance at, and a stack of "I'll get back to these" that don't need to be visible right now. I don't want them tiled into smaller and smaller boxes; I want them off-screen, waiting, available with one keystroke.</p>
+<p>Inspired by <a href="https://github.com/YaLTeR/niri">niri</a> (a scrollable-tiling Wayland compositor on Linux), Reel arranges windows on an infinite horizontal strip, one column per window, and the screen is a <em>viewport</em> onto that strip. You scroll the strip left or right to navigate. The focused window stays prominent. Its neighbors are visible at the edges of the screen. Everything else is parked off-screen at a position you can return to instantly.</p>
+<p>The result feels a lot more like flipping through a film reel than tiling a grid. Hence the name.</p>
+<h2 id="whatitactuallydoes">What it actually does</h2>
+<p><strong>Infinite horizontal strip.</strong> Windows lay out left-to-right. There's no limit. You scroll the strip rather than splitting the screen.</p>
+<p><strong>Spring-based scrolling.</strong> Pressing the scroll key kicks off a spring animation that decelerates onto the target column. Repeated keypresses compound velocity. Hold down "focus right" and the strip flies past, then catches.</p>
+<p><strong>Trackpad, keyboard, and mouse.</strong> Reel doesn't pick a favorite input device. Swipe with a modifier to scroll the strip. Hotkeys to jump columns. Click a window's title bar to focus it; drag with a modifier to reorder columns.</p>
+<p><strong>Multi-monitor.</strong> Horizontally-aligned monitors share one continuous strip, and columns flow across the seam. Stacked or offset monitors get their own independent strips. (The merging logic is one of the things I want to write a whole post about; it took several iterations to get right.)</p>
+<p><strong>Space-aware.</strong> Switching macOS Spaces saves the strip's state and restores it when you come back.</p>
+<p><strong>Position memory.</strong> Reopen Chrome and it returns to where it was in the strip. The mapping survives across app restarts.</p>
+<p><strong>Configurable focus indicator.</strong> A subtle ring, a vertical raise, or a brief flash on the focused window. Pick what you can ignore.</p>
+<p><strong>Floating windows.</strong> Toggle any window out of the strip. Some apps (system dialogs, settings panels) auto-float by rule.</p>
+<p><strong>IPC.</strong> A <code>reel-msg</code> CLI sends commands over a Unix socket. Hook it up to whatever scripting layer you like.</p>
+<p>No <a href="https://support.apple.com/en-us/102149">SIP</a> disable. Pure Swift + the macOS <a href="https://developer.apple.com/documentation/applicationservices/axuielement">Accessibility API</a>.</p>
+<h2 id="whyswiftandwhynosip">Why Swift, and why no SIP</h2>
+<p>A non-trivial chunk of macOS window-manager prior art relies on disabling System Integrity Protection or using private frameworks. I didn't want either.</p>
+<ul>
+<li><strong>SIP disable is a non-starter for me.</strong> I want this on my main laptop. I want full disk encryption, MDM compatibility, all the protections. If a tool's prerequisite is "first, weaken your OS", that tool is not landing on my machine.</li>
+<li><strong>Private framework usage is fragile.</strong> It works until the next macOS minor release ships a different ABI and your window manager segfaults on boot.</li>
+</ul>
+<p>That leaves the documented Accessibility API as the way windows get moved and resized, plus a single (one!) carefully-chosen private symbol: <code>_AXUIElementGetWindow</code>, which maps <code>AXUIElement</code> → <code>CGWindowID</code>. It's been stable for a decade and is used by every other AX-based WM in the ecosystem.</p>
+<p>Swift is the natural language. Foundation gives you the data types, AppKit gives you windows and screens, <a href="https://developer.apple.com/documentation/coregraphics/quartz_event_services"><code>CGEventTap</code></a> gives you global hotkeys and gestures, <a href="https://developer.apple.com/documentation/quartzcore/cadisplaylink"><code>CADisplayLink</code></a> gives you a frame loop. No bridging headers, no Objective-C++, no Electron.</p>
+<h2 id="thelayering">The layering</h2>
+<p>The codebase splits into five library modules, with strict layering:</p>
+<pre><code>Reel (app entry) ──→ WindowManager ──→ Platform ──→ Core
+                              │                         ↑
+                              ├──→ Config (TOMLKit) ────┘
+                              └──→ IPC ─────────────────┘
+</code></pre>
+<ul>
+<li><strong>Core</strong>: pure layout logic. Foundation + CoreGraphics only. No AppKit, no AX calls. The strip data structures, spring math, snap-point logic. Fully testable without a window in sight.</li>
+<li><strong>Platform</strong>: macOS API wrappers. AX, hotkeys, gestures, displays. Every "talk to the OS" call goes through here.</li>
+<li><strong>WindowManager</strong>: orchestration. The thing that listens for hotkeys, asks Core for new layouts, dispatches to Platform.</li>
+<li><strong>Config</strong>: TOML parsing for <code>~/.config/reel/config.toml</code>.</li>
+<li><strong>IPC</strong>: Unix socket server, <code>reel-msg</code> CLI client.</li>
+</ul>
+<p>The most important boundary is the Core / Platform one. Core is a pure-function package: give it a strip and a timestamp, get back a list of target frames. That single design choice lets me unit-test almost every behavior without ever opening a window. Layout, animation, snap-on-flick and multi-monitor flow all live in a module that doesn't know macOS exists.</p>
+<h2 id="thecoredatastructure">The core data structure</h2>
+<p>The strip itself is an ordered list of columns:</p>
+<pre><code class="swift language-swift">struct Column {
+    var data: ColumnData
+}
+
+struct ColumnData {
+    var tile: TileID            // identifies a window
+    var width: CGFloat          // explicit width
+    // ...
+}
+
+struct Strip {
+    var columns: [Column]
+    var focusedIndex: Int
+    var viewOffset: ViewOffset
+    // ...
+}
+</code></pre>
+<p>The thing I'm most pleased with: column X-positions are <em>derived</em> rather than stored. Given a list of widths and a gap, the X of column <code>i</code> is <code>sum(widths[0..i]) + i*gap</code>. Any mutation (insert, remove, reorder, resize) is a mutation of widths, and the positions follow.</p>
+<p>This sounds obvious, but the temptation when you're first sketching the model is to store positions on each column "for performance". The moment you do that, every layout mutation has to keep N positions in sync, and your bug surface explodes. Derived positions = single source of truth.</p>
+<p>The other Core type is <code>ViewOffset</code>:</p>
+<pre><code class="swift language-swift">enum ViewOffset {
+    case static_(Double)
+    case animation(SpringAnimation)
+    case gesture(GestureState)
+
+    func current(at time: TimeInterval) -&gt; Double { ... }
+}
+</code></pre>
+<p>It's a state machine for "where the viewport is on the strip". A keyboard scroll → <code>.animation</code>. A trackpad swipe in progress → <code>.gesture</code>. Idle → <code>.static</code>. The rest of the engine asks <code>viewOffset.current(at:)</code> and gets a single Double back; it doesn't have to care which mode the viewport is in.</p>
+<p>That single function, "give me the current scroll position as of timestamp T", is the heart of the whole animation pipeline. Once that exists, the frame loop is "every tick, ask Core for target frames, dispatch them to AX".</p>
+<h2 id="thehardestbugsofar">The hardest bug so far</h2>
+<p>For posterity, the bug that ate the most days: setting an AX window's frame is not atomic.</p>
+<p><code>AXUIElement</code> exposes a <code>frame</code> attribute (kind of) but in practice you set the size and position separately. If you set position first and then size, the window often clips to the old position's screen bounds and gets repositioned to make the new size fit, which manifests as windows "drifting" off the strip during certain layout sequences.</p>
+<p>The fix is a three-step <code>size → position → size</code> dance: nudge the size, set the position, then set the size again. The second size set is the one that "sticks" without macOS's per-screen clamping fighting you. It looks ridiculous. It works.</p>
+<pre><code class="swift language-swift">ax.setSize(target.size)
+ax.setPosition(target.origin)
+ax.setSize(target.size)
+</code></pre>
+<p>I'd love to find a cleaner approach. I have not. This dance is in production.</p>
+<h2 id="whereitstands">Where it stands</h2>
+<p>Reel is in active daily use on my laptop. Most of the obvious features are in place. The next big push is around the parts that have been hard:</p>
+<ul>
+<li>The multi-monitor strip-merging logic, particularly when monitors are hot-plugged or rearranged mid-session.</li>
+<li>The focus-indicator vertical "raise" animation, which has to thread through the per-column Y offset without breaking the rest of the animation pipeline.</li>
+<li>A <code>pip</code> mode for things like the Picture-in-Picture window that wants to behave differently from tiled windows.</li>
+</ul>
+<p>Next month I want to write specifically about coordinate systems and the kinds of bugs you only find when you have three of them in the same source file. Until then, if you're a Mac user who's been looking for a Linux-style scrollable WM, the binary is up and the source is open.</p>
+<p>Happy scrolling.</p>
+<h2 id="references">References</h2>
+<p><strong>Prior art</strong></p>
+<ul>
+<li><a href="https://github.com/YaLTeR/niri">niri</a>: scrollable-tiling Wayland compositor (the direct inspiration)</li>
+<li><a href="https://github.com/koekeishiya/yabai">yabai</a>, <a href="https://github.com/ianyh/Amethyst">Amethyst</a>, <a href="https://github.com/nikitabobko/AeroSpace">AeroSpace</a>: other macOS tiling WMs</li>
+</ul>
+<p><strong>Apple APIs</strong></p>
+<ul>
+<li><a href="https://developer.apple.com/documentation/applicationservices/axuielement">Accessibility (<code>AXUIElement</code>)</a></li>
+<li><a href="https://developer.apple.com/documentation/appkit/nsview"><code>NSView</code></a>, <a href="https://developer.apple.com/documentation/appkit/nswindow"><code>NSWindow</code></a>, <a href="https://developer.apple.com/documentation/appkit/nsscreen"><code>NSScreen</code></a></li>
+<li><a href="https://developer.apple.com/documentation/coregraphics/quartz_event_services">Quartz Event Services (<code>CGEventTap</code>)</a></li>
+<li><a href="https://developer.apple.com/documentation/quartzcore/cadisplaylink"><code>CADisplayLink</code></a></li>
+<li><a href="https://support.apple.com/en-us/102149">About System Integrity Protection</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=yes, initial-scale=1.0, maximum-scale=3.0, minimum-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Sudoku Flick — flat design, timing animations, and the rules I won't break</title>
+    <meta name="description" content="Blog of a Software Engineer"/>
+    <meta name="keywords" content="blog,developer blog,engineering blog"/>
+
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Alegreya:400,400i|Lato:400,400i,700,900|Roboto+Mono:400,300">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/shades-of-purple.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/highlight.min.js"></script>
+
+    <link rel="stylesheet" href="/css/normalize.css"/>
+    <link rel="stylesheet" href="/css/theme.css"/>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav__left">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+    </div>
+    <div class="nav__right">
+
+        <a target="_blank" href="https://github.com/btj93" class="link-github">GitHub</a>
+
+
+
+        <a target="_blank" href="https://www.linkedin.com/in/jeffrey-c-21b846212" class="link-linkedin">LinkedIn</a>
+
+
+        <a href="mailto:jeffcyc99@gmail.com" class="link-email">Email</a>
+
+    </div>
+</nav>
+
+<article class="mar-b-7">
+    <header class="text-center">
+        <time class="mar-b-6" datetime="2026-02-22">Sun, February 22, 2026</time>
+        <h1 class="mar-b-7">Sudoku Flick — flat design, timing animations, and the rules I won't break</h1>
+    </header>
+    <h1 id="sudokuflickflatdesigntiminganimationsandtherulesiwontbreak">Sudoku Flick — flat design, timing animations, and the rules I won't break</h1>
+<p>A month after <a href="/designing-sudoku-flick">the first post</a>, Sudoku Flick is <em>playable</em>. There's a real solver, a real generator, a real undo stack, and the flick gesture stopped fighting me weeks ago. I've put about two hundred commits into it since the new year.</p>
+<p>But the part I want to write about today is design discipline: the constraints I wrote down on day one and how they've held up under contact with real features.</p>
+<div class="github-card" data-github="btj93/sudoku-flick" data-width="400" data-height="" data-theme="default"></div>
+<h2 id="therulesheetistartedwith">The rule sheet I started with</h2>
+<p>Day one rules:</p>
+<ol>
+<li><strong>Flat design only.</strong> No shadows, no gradients, no blur, no glassmorphism, no 3D.</li>
+<li><strong>Timing-based animations only.</strong> <code>withTiming</code> with cubic easing. Never <code>withSpring</code>. No bounce, elastic, or overshoot.</li>
+<li><strong>Zero hardcoded colors.</strong> Every color goes through a theme token. The same component renders correctly in any palette.</li>
+<li><strong>Strategic negative space.</strong> Decoration is a defect.</li>
+<li><strong>The grid is the interface.</strong> The Sudoku board is the hero. Everything else exists to serve solving.</li>
+</ol>
+<p>Each one of these has been tested at least once.</p>
+<h2 id="rule2hasbeenthehardest">Rule 2 has been the hardest</h2>
+<p>The rule I get tempted to break the most is "no springs."</p>
+<p>Springs are <em>fun</em>. A button that gives a little bounce on tap, a cell that wiggles when you place a wrong digit, a pop on success. The vocabulary of mobile delight is, almost entirely, written in spring physics.</p>
+<p>But springs do two things I don't want:</p>
+<ol>
+<li><strong>They overshoot.</strong> The whole point of Sudoku Flick's aesthetic is calm. A spring that overshoots and settles is the visual equivalent of a small percussive sound. Fine once, exhausting after the seventieth placement.</li>
+<li><strong>They have non-deterministic duration.</strong> A <a href="https://docs.swmansion.com/react-native-reanimated/docs/animations/withSpring"><code>withSpring(target, { damping: 15, stiffness: 80 })</code></a> can take anywhere from 200ms to 1.2s depending on the velocity it starts with. If two animations need to land at the same time (say, a digit appearing in a cell and a conflict highlight in a peer cell), <a href="https://docs.swmansion.com/react-native-reanimated/docs/animations/withTiming"><code>withTiming</code></a> lines them up cleanly. <code>withSpring</code> doesn't.</li>
+</ol>
+<p>So: <code>withTiming</code> with cubic easing, every time. The constraint forces me to design transitions in terms of <em>duration</em> and <em>easing</em>, which are properties I can reason about, instead of <em>physics</em>, which are properties that emerge.</p>
+<p>In Reanimated terms (with <a href="https://docs.swmansion.com/react-native-reanimated/docs/animations/withTiming"><code>Easing</code></a> for the curve):</p>
+<pre><code class="ts language-ts">const CAMERA_EASING = Easing.bezier(0.25, 0.1, 0.25, 1);
+
+opacity.value = withTiming(1, { duration: 200, easing: CAMERA_EASING });
+</code></pre>
+<p>That <code>CAMERA_EASING</code> curve is the one I use for almost everything. It's a slight ease-out: fast to start, gentle to settle. The first time it appears in the file it feels like a deliberate choice. By the seventieth time, you stop noticing animations are happening, which is the goal.</p>
+<h3 id="thewrongdigitshake">The wrong-digit shake</h3>
+<p>The hardest case I hit was "what happens when the player places a digit that conflicts with the rules?"</p>
+<p>The instinct from mobile-game muscle memory is: shake the cell. A horizontal shake done with springs is a one-liner. I wrote it. It worked. It felt wrong inside the app.</p>
+<p>What I ended up with instead:</p>
+<ul>
+<li>The cell flashes the conflict color (<code>semantic.error</code>) for 120ms.</li>
+<li>The digit is <em>not</em> placed.</li>
+<li>The peer cells that caused the conflict flash the same color for the same duration.</li>
+</ul>
+<p>No movement at all, just a brief color event. The information transfer is the same (<em>this digit doesn't fit here, and these are why</em>), but the page feels still.</p>
+<p>The spring impulse came from "movement = feedback". But color is also feedback, and color obeys the same rules as the rest of the UI.</p>
+<h2 id="rule3forcedmetobuildarealthemesystem">Rule 3 forced me to build a real theme system</h2>
+<p>"No hardcoded colors" sounds boring in a rule list. In practice it shaped most of the app's structure.</p>
+<p>The shape:</p>
+<pre><code class="ts language-ts">const colors = useTheme(); // hook returns the active theme's tokens
+
+&lt;Cell
+  borderColor={colors.gridBorder}
+  background={isSelected ? colors.cellSelected : colors.cellBackground}
+  textColor={isGiven ? colors.textGiven : colors.textUser}
+/&gt;
+</code></pre>
+<p>Every theme is an object that fills in <em>the same set of keys</em>. The component doesn't know which theme it's drawing in. Switching the theme is a single state change at the root; every component re-renders against the new tokens with no per-component code.</p>
+<p>Two things I got out of this:</p>
+<ol>
+<li><strong>Colorblind themes for free.</strong> Two of the themes use a blue/yellow palette instead of red/green. I didn't have to find every conflict-color use site and change it; I had to define the tokens once. Components don't care.</li>
+<li><strong>Dark mode for free, also.</strong> Each theme has a light and dark variant. The "follow system" toggle just picks one of the two at render time.</li>
+</ol>
+<p>The first time I tried to do a quick visual hack and hardcoded <code>#FF6B6B</code> for an error flash, I had to back it out within a day because it didn't work in the dark variant of one of the themes. After that I just stopped trying. Every color goes through the tokens.</p>
+<h2 id="rule5istheruleiforget">Rule 5 is the rule I forget</h2>
+<p>"The grid is the interface" is the easiest rule to write and the hardest to enforce.</p>
+<p>Every "wouldn't it be cool if…" feature I think of starts with adding something to the board area. A hint badge in the corner of cells with hint-worthy peers, a timer at the top, a streak counter, a bonus animation when you complete a row.</p>
+<p>Every one of those, when I sit with it for a day, gets cut. The principle is <em>the player should be able to look at the board and only see what's needed to solve the puzzle</em>. Hints belong on demand, not always-on. Time elapsed belongs in a screen the player navigates to, not always-on. Streaks don't belong at all.</p>
+<p>The single visual element on the board that <em>isn't</em> the puzzle: a small indicator above the active cell showing which digit is about to be placed when the flick lands. It's there for a third of a second, it's a thin outline, and it disappears the moment the gesture ends. Anything more permanent gets cut.</p>
+<h2 id="thingsiaddedthatdontbreaktherules">Things I added that don't break the rules</h2>
+<p>A few features I shipped this month that survived contact with the rule sheet:</p>
+<ul>
+<li><p><strong>Practice mode for new players.</strong> A four-cell exercise where the player learns the flick gesture in isolation, before the real puzzle. Uses timing-based fades for cell transitions, no springs. The "all correct!" message fades in over 200ms, and a <em>single</em> "one more round" button fades in 150ms later. The player can replay as many times as they want; the Next button stays enabled after the first success.</p></li>
+<li><p><strong>Draggable bottom nav.</strong> The settings/themes/about row at the bottom can be dragged side-to-side. You don't have to drag, you can tap, and the drag uses <code>withTiming</code> snap-to-position rather than springs. It works because Sudoku Flick has a deliberately small set of top-level destinations. The drag is faster than the tap for me, but the tap is the obvious thing to do for anyone else.</p></li>
+<li><p><strong>Animation toggle in settings.</strong> This one was required. The setting reads from the system's "Reduce Motion" preference (via <a href="https://reactnative.dev/docs/accessibilityinfo"><code>AccessibilityInfo</code></a>) on first launch and can be overridden by the player. Every <code>withTiming</code> call in the codebase checks this value:</p></li>
+</ul>
+<pre><code class="ts language-ts">const duration = animationsEnabled ? 200 : 0;
+opacity.value = withTiming(1, { duration, easing: CAMERA_EASING });
+</code></pre>
+<p><code>duration: 0</code> means the transition is instant but the <em>callback structure</em> is the same. State machines that wait for an animation to finish still work; they just don't wait.</p>
+<h2 id="animationasalayernotafeature">Animation as a layer, not a feature</h2>
+<p>Across all of these, animation is a <em>layer</em> in the architecture, not a feature.</p>
+<p>Every component renders the same regardless of whether animations are on. The state model doesn't change with the animation toggle. The toggle changes one thing: the <code>duration</code> argument to every transition.</p>
+<p>It makes "what does this look like with animations off?" a one-line check. I don't have a separate accessibility-rendering path. I have <em>one</em> rendering path, parameterized by duration, where duration can be zero.</p>
+<p>People turn animation off for good reasons: vestibular issues, low-power mode, sensory sensitivity. For an app that wants to ship to those people, that's the only design that's honest.</p>
+<h2 id="whereitstands">Where it stands</h2>
+<p>The puzzle generator and solver are working. Difficulty levels are stubbed in. The flick gesture is at a place where I trust it on a moving train (literally, I commute with it every day).</p>
+<p>What I'm building next month: an onboarding flow that doesn't suck. Sudoku Flick is asking the player to learn a new input method, and "tap-to-place" is the muscle memory we have to overwrite. The plan is a few-screen, in-context tutorial that <em>only</em> teaches the flick. No "welcome to Sudoku Flick" marketing slide. No "here are our features" carousel. Just: here's a cell, do this, you did it.</p>
+<p>That's the topic for next time. Spring-free, of course.</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://docs.swmansion.com/react-native-reanimated/docs/animations/withTiming">Reanimated <code>withTiming</code></a>: also where the <code>Easing</code> module is documented</li>
+<li><a href="https://docs.swmansion.com/react-native-reanimated/docs/animations/withSpring">Reanimated <code>withSpring</code></a></li>
+<li><a href="https://easings.net/">easings.net</a>: visualization of common easing curves</li>
+<li><a href="https://reactnative.dev/docs/accessibilityinfo">React Native <code>AccessibilityInfo</code></a>: for reading the system Reduce Motion preference</li>
+<li><a href="/designing-sudoku-flick">Part 1 — Designing Sudoku Flick</a></li>
+</ul>
+</article>
+
+<article>
+  <!-- Author section starts here -->
+  <div class="author-section">
+    <div class="author-name"> Jeffrey Cheung </div>
+    <p class="author-bio">
+      Backend Software Engineer at <a href="https://stransa.co.jp/" target="_blank">Stransa</a>. Obsessed to learn and build things. Occasionally, I write blogs about neovim related stuffs and articles I read lately.
+    </p>
+    <div class="author-links">
+      
+        <a href="https://github.com/btj93" target="_blank" rel="noopener noreferrer">GitHub</a>
+      
+      
+      
+        <a href="https://www.linkedin.com/in/jeffrey-c-21b846212" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      
+      
+        <a href="mailto:jeffcyc99@gmail.com" target="_blank" rel="noopener noreferrer">Email</a>
+      
+    </div>
+  </div>
+  <!-- Author section ends here -->
+</article>
+
+
+
+<footer class="text-center mar-tb-6">
+    © 2026 Jeffrey Cheung, unless otherwise stated.
+</footer>
+
+<script>hljs.highlightAll();</script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
+
+</body>
+</html>
+
